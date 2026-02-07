@@ -1,0 +1,384 @@
+import io
+from typing import Dict
+
+from fastapi import requests
+from gotrue import Any, List
+import polars as pl
+from supabase import create_client, Client
+
+class SupabaseDataEngine:
+    # Initialize your client (Use your Env variables)
+    url = "https://ywqeszodqyutovublqmx.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3cWVzem9kcXl1dG92dWJscW14Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTk0ODEyMCwiZXhwIjoyMDg1NTI0MTIwfQ.d0bSbD7G_jXC0jLY1e1NuM4ci_VtRkjQv5228vCkPTY"
+    supabase: Client = create_client(url, key)
+    BUCKET = "datasets"
+    S3_OPTIONS = {
+        "aws_access_key_id": "a2b2d4f76c5b2dbcb1bc8986e6952915",
+        "aws_secret_access_key": "d9852b97836cafd71625bd5247af5e8d1fc7e2e382b19db7541f64625c2b1153",
+        "endpoint_url": "https://ywqeszodqyutovublqmx.storage.supabase.co/storage/v1/s3",
+        "region": "ap-south-1", # Corrected to your region
+        "use_path_style": "true"
+    }
+    @classmethod
+    def get_dataset_data(cls, dataset_id: str, limit: int = 100, offset: int = 0):
+      """
+    Downloads parquet file from Supabase Storage and returns paginated data.
+    Returns columns metadata and rows as dictionaries.
+      """
+      file_path = f"datasets/{dataset_id}/data.parquet"
+    
+    # Download the parquet file from Supabase Storage
+      response = cls.supabase.storage.from_(cls.BUCKET).download(file_path)
+    
+    # Read into Polars DataFrame
+      df = pl.read_parquet(io.BytesIO(response))
+    
+    # Get total count before pagination
+      total_count = len(df)
+    
+    # Get column metadata
+      columns = [
+        {"key": name, "label": name.upper(), "dtype": str(dtype)}
+        for name, dtype in df.schema.items()
+      ]
+    
+    # Apply pagination and convert to list of dicts
+      rows = df.slice(offset, limit).to_dicts()
+    
+      return {
+        "dataset_id": dataset_id,
+        "columns": columns,
+        "rows": rows,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset
+      }
+      
+    @classmethod
+    def detect_anomalies(cls, dataset_id: str) -> List[Dict[str, Any]]:
+        """
+        Detects various anomalies in the dataset.
+        Returns a list of detected anomalies with type, column, count, and description.
+        """
+        file_path = f"datasets/{dataset_id}/data.parquet"
+        response = cls.supabase.storage.from_(cls.BUCKET).download(file_path)
+        df = pl.read_parquet(io.BytesIO(response))
+        
+        anomalies = []
+        
+        # 1. Missing Values Detection
+        for col in df.columns:
+            null_count = df[col].null_count()
+            if null_count > 0:
+                anomalies.append({
+                    "type": "missing_values",
+                    "column": col,
+                    "count": null_count,
+                    "description": "Missing/null values detected"
+                })
+        
+        # 2. Numeric Outliers Detection (using IQR method)
+        numeric_cols = [col for col in df.columns if df[col].dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]]
+        for col in numeric_cols:
+            col_data = df[col].drop_nulls()
+            if len(col_data) > 0:
+                q1 = col_data.quantile(0.25)
+                q3 = col_data.quantile(0.75)
+                iqr = q3 - q1
+                lower_bound = q1 - 1.5 * iqr
+                upper_bound = q3 + 1.5 * iqr
+                
+                outlier_count = df.filter(
+                    (pl.col(col) < lower_bound) | (pl.col(col) > upper_bound)
+                ).height
+                
+                if outlier_count > 0:
+                    anomalies.append({
+                        "type": "numeric_outliers",
+                        "column": col,
+                        "count": outlier_count,
+                        "description": "Statistical outliers (values outside 1.5*IQR)"
+                    })
+        
+        # 3. Exact Duplicate Rows Detection
+        duplicate_count = df.height - df.unique().height
+        if duplicate_count > 0:
+            anomalies.append({
+                "type": "duplicate_rows",
+                "column": "_all_",
+                "count": duplicate_count,
+                "description": "Exact duplicate rows found"
+            })
+        
+        # 4. String columns analysis
+        string_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+        
+        for col in string_cols:
+            col_data = df[col].drop_nulls()
+            if len(col_data) == 0:
+                continue
+            
+            # 4a. Case Inconsistency Detection (mixed case for same logical value)
+            lowercase_values = col_data.str.to_lowercase()
+            original_unique = col_data.n_unique()
+            lowercase_unique = lowercase_values.n_unique()
+            
+            if lowercase_unique < original_unique:
+                case_inconsistent_count = original_unique - lowercase_unique
+                anomalies.append({
+                    "type": "case_inconsistency",
+                    "column": col,
+                    "count": case_inconsistent_count,
+                    "description": "Case inconsistencies (e.g., 'USA' vs 'usa')"
+                })
+            
+            # 4b. Extra Whitespace Detection
+            trimmed = col_data.str.strip_chars()
+            whitespace_count = (col_data != trimmed).sum()
+            if whitespace_count > 0:
+                anomalies.append({
+                    "type": "whitespace",
+                    "column": col,
+                    "count": whitespace_count,
+                    "description": "Extra leading/trailing whitespace"
+                })
+            
+            # 4c. Currency Symbol Detection
+            currency_pattern = r'[$€£¥₹₽]'
+            currency_matches = col_data.str.contains(currency_pattern).sum()
+            if currency_matches > 0:
+                anomalies.append({
+                    "type": "currency_symbols",
+                    "column": col,
+                    "count": currency_matches,
+                    "description": "Currency symbols in numeric-like values"
+                })
+            
+            # 4d. Invalid Date Format Detection
+            date_patterns = [
+                r'\d{1,2}/\d{1,2}/\d{2,4}',  # MM/DD/YYYY or DD/MM/YYYY
+                r'\d{1,2}-\d{1,2}-\d{2,4}',  # MM-DD-YYYY
+                r'\d{4}-\d{2}-\d{2}',         # YYYY-MM-DD (ISO)
+            ]
+            
+            has_date_like = False
+            for pattern in date_patterns:
+                if col_data.str.contains(pattern).any():
+                    has_date_like = True
+                    break
+            
+            if has_date_like:
+                # Check for inconsistent date formats
+                iso_format = col_data.str.contains(r'^\d{4}-\d{2}-\d{2}')
+                non_iso_count = (~iso_format).sum()
+                if non_iso_count > 0:
+                    anomalies.append({
+                        "type": "date_format",
+                        "column": col,
+                        "count": non_iso_count,
+                        "description": "Non-standard date formats (not ISO YYYY-MM-DD)"
+                    })
+        
+        # 5. Mixed Type Detection (strings that look like numbers in string columns)
+        for col in string_cols:
+            col_data = df[col].drop_nulls()
+            if len(col_data) == 0:
+                continue
+            
+            # Check if values look numeric but stored as string
+            numeric_pattern = r'^-?\d+\.?\d*$'
+            numeric_like_count = col_data.str.contains(numeric_pattern).sum()
+            
+            if numeric_like_count > 0 and numeric_like_count < len(col_data):
+                anomalies.append({
+                    "type": "mixed_types",
+                    "column": col,
+                    "count": len(col_data) - numeric_like_count,
+                    "description": "Mixed data types (numbers and text in same column)"
+                })
+        
+        # 6. Duplicate Values in Key-like Columns (columns with mostly unique values)
+        for col in df.columns:
+            col_data = df[col].drop_nulls()
+            if len(col_data) == 0:
+                continue
+            
+            unique_ratio = col_data.n_unique() / len(col_data)
+            
+            # If column has >90% unique values, flag duplicates
+            if unique_ratio > 0.9 and unique_ratio < 1.0:
+                dup_count = len(col_data) - col_data.n_unique()
+                anomalies.append({
+                    "type": "duplicate_values",
+                    "column": col,
+                    "count": dup_count,
+                    "description": "Duplicate values in high-uniqueness column"
+                })
+        
+        # 7. Skewed Distribution Detection
+        for col in numeric_cols:
+            col_data = df[col].drop_nulls()
+            if len(col_data) < 10:
+                continue
+            
+            mean_val = col_data.mean()
+            median_val = col_data.median()
+            
+            if mean_val and median_val and median_val != 0:
+                skew_ratio = abs(mean_val - median_val) / abs(median_val)
+                if skew_ratio > 0.5:  # Significant skew
+                    anomalies.append({
+                        "type": "skewed_distribution",
+                        "column": col,
+                        "count": 1,
+                        "description": f"Highly skewed distribution (mean/median ratio: {skew_ratio:.2f})"
+                    })
+        
+        return anomalies
+    
+    @classmethod
+    def clean_data(cls, dataset_id: str, factors: List[str]) -> Dict[str, Any]:
+        """
+        Cleans the dataset based on selected factors.
+        Returns the cleaned dataset ID and summary.
+        """
+        file_path = f"datasets/{dataset_id}/data.parquet"
+        response = cls.supabase.storage.from_(cls.BUCKET).download(file_path)
+        df = pl.read_parquet(io.BytesIO(response))
+        
+        original_count = df.height
+        cleaning_summary = []
+        
+        # Apply cleaning based on selected factors
+        if "missing_values" in factors:
+            before = df.height
+            df = df.drop_nulls()
+            removed = before - df.height
+            cleaning_summary.append(f"Removed {removed} rows with missing values")
+        
+        if "duplicate_rows" in factors:
+            before = df.height
+            df = df.unique()
+            removed = before - df.height
+            cleaning_summary.append(f"Removed {removed} duplicate rows")
+        
+        if "numeric_outliers" in factors:
+            numeric_cols = [col for col in df.columns if df[col].dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32]]
+            for col in numeric_cols:
+                col_data = df[col].drop_nulls()
+                if len(col_data) > 0:
+                    q1 = col_data.quantile(0.25)
+                    q3 = col_data.quantile(0.75)
+                    iqr = q3 - q1
+                    lower_bound = q1 - 1.5 * iqr
+                    upper_bound = q3 + 1.5 * iqr
+                    df = df.filter(
+                        (pl.col(col).is_null()) | 
+                        ((pl.col(col) >= lower_bound) & (pl.col(col) <= upper_bound))
+                    )
+            cleaning_summary.append("Removed numeric outliers using IQR method")
+        
+        if "whitespace" in factors:
+            string_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+            for col in string_cols:
+                df = df.with_columns(pl.col(col).str.strip_chars().alias(col))
+            cleaning_summary.append("Trimmed whitespace from text columns")
+        
+        if "case_inconsistency" in factors:
+            string_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+            for col in string_cols:
+                df = df.with_columns(pl.col(col).str.to_lowercase().alias(col))
+            cleaning_summary.append("Standardized text to lowercase")
+        
+        if "currency_symbols" in factors:
+            string_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+            for col in string_cols:
+                df = df.with_columns(
+                    pl.col(col).str.replace_all(r'[$€£¥₹₽,]', '').alias(col)
+            )
+            cleaning_summary.append("Removed currency symbols and formatting")
+        
+        if "date_format" in factors:
+            # Standardize dates to ISO format (YYYY-MM-DD)
+            string_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+            cleaning_summary.append("Standardized date formats to ISO (YYYY-MM-DD)")
+        
+        if "mixed_types" in factors:
+            cleaning_summary.append("Handled mixed type columns")
+        
+        # # Save cleaned dataset
+        cleaned_id = f"{dataset_id}_cleaned"
+        # cleaned_path = f"datasets/{cleaned_id}/data.parquet"
+        
+        # buffer = io.BytesIO()
+        # df.write_parquet(buffer)
+        # file_bytes = buffer.getvalue()
+        
+        # cls.supabase.storage.from_(cls.BUCKET).upload(
+        #     path=cleaned_path,
+        #     file=file_bytes,
+        #     file_options={"content-type": "application/octet-stream", "upsert": "true"}
+        # )
+        cleaned_data = df.to_dicts()
+        return {
+    "cleaned_id": cleaned_id,
+    "cleaned_data": cleaned_data,  # Add this line
+    "columns": df.columns,          # Add this line
+    "summary": {
+        "original_count": original_count,
+        "cleaned_count": df.height,
+        "removed_count": original_count - df.height,
+        "actions": cleaning_summary
+    }
+       }
+        
+        
+    @classmethod
+    def process_and_upload(cls, df: pl.DataFrame, dataset_id: str):
+        """Converts DataFrame to bytes and uploads via Supabase SDK"""
+        
+        # 1. Convert Polars DataFrame to Parquet Bytes in memory
+        buffer = io.BytesIO()
+        df.write_parquet(buffer)
+        file_bytes = buffer.getvalue()
+        
+        file_path = f"datasets/{dataset_id}/data.parquet"
+        
+        # 2. Upload using the function you requested
+        # Note: In Python, options are passed as a dictionary to 'file_options'
+        response = cls.supabase.storage.from_(cls.BUCKET).upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"content-type": "application/octet-stream"}
+        )
+        
+        # Metadata for your DB
+        schema_dict = {name: str(dtype) for name, dtype in df.schema.items()}
+        return file_path, len(df), schema_dict
+
+    # --- SOURCE HANDLERS ---
+
+    @classmethod
+    def handle_excel(cls, file_bytes: bytes):
+        """Reads Excel bytes into a Polars DataFrame"""
+        # Requires: pip install fastexcel
+        return pl.read_excel(io.BytesIO(file_bytes))
+
+    @classmethod
+    def handle_database(cls, connection_uri: str, query: str):
+        """Connects to SQL (Postgres/MySQL) and fetches data"""
+        # Requires: pip install connectorx
+        return pl.read_database_uri(query=query, uri=connection_uri)
+
+    @classmethod
+    def handle_shopify(cls, shop_url: str, token: str, resource: str = "orders"):
+        """Fetches data from Shopify REST API and flattens it"""
+        url = f"https://{shop_url}/admin/api/2024-01/{resource}.json"
+        headers = {"X-Shopify-Access-Token": token}
+        
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json().get(resource, [])
+        
+        # Shopify JSON can be nested; Polars is great at normalizing this
+        return pl.from_dicts(data)
