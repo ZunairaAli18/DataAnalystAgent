@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
+import { AppLayout } from "@/components/app-layout"
 import { Loader2, AlertCircle, ChevronLeft, ChevronRight, CheckCircle, ArrowLeft, Download } from "lucide-react"
 
 interface Column {
@@ -140,7 +141,7 @@ export default function CleanedDataPage() {
   }
 
   return (
-    <main className="min-h-screen bg-background">
+    <AppLayout>
       <div className="p-8">
         {/* Header */}
         <div className="mb-8">
@@ -310,6 +311,6 @@ export default function CleanedDataPage() {
           </div>
         )}
       </div>
-    </main>
+    </AppLayout>
   )
 }
