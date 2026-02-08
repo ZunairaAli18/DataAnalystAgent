@@ -583,9 +583,9 @@ export default function DashboardPage() {
         </div>
 
         {/* Dashboard Content - Exportable */}
-        <div id="dashboard-content" className="bg-white text-black rounded-lg overflow-hidden">
+        <div id="dashboard-content">
           {/* KPI Cards */}
-          <div className={cn("grid gap-4 mb-6 p-6 pt-0", kpis.length <= 3 ? "grid-cols-3" : "grid-cols-4")}>
+          <div className={cn("grid gap-4 mb-6", kpis.length <= 3 ? "grid-cols-3" : "grid-cols-4")}>
           {kpis.map((kpi, idx) => (
             <div key={idx} className="p-4 rounded-xl bg-card border border-border">
               <div className="flex items-center justify-between mb-2">
