@@ -137,7 +137,8 @@ async def upload_file(
             BytesIO(content),
             truncate_ragged_lines=True,  # Ignores extra columns in "dirty" rows
             infer_schema_length=10000,   # Checks more rows to guess types accurately
-            ignore_errors=True           # Skips lines that are totally broken
+            ignore_errors=True,          # Skips lines that are totally broken
+            encoding="utf8-lossy"        # Handles non-UTF-8 chars (Latin-1, Windows-1252, etc.)
         )
     else:
         reader = lambda: SupabaseDataEngine.handle_excel(content)
