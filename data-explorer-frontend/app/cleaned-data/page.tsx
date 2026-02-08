@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { AppLayout } from "@/components/app-layout"
-import { Loader2, AlertCircle, ChevronLeft, ChevronRight, CheckCircle, ArrowLeft, Download } from "lucide-react"
+import { Loader2, AlertCircle, ChevronLeft, ChevronRight, CheckCircle, ArrowLeft, Download, BarChart3 } from "lucide-react"
 
 interface Column {
   key: string
@@ -168,14 +168,24 @@ export default function CleanedDataPage() {
                 </p>
               )}
             </div>
-            <button
-              onClick={handleExport}
-              disabled={data.rows.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Download className="w-4 h-4" />
-              Export CSV
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleExport}
+                disabled={data.rows.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-secondary text-foreground font-semibold rounded-lg hover:bg-secondary/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" />
+                Export CSV
+              </button>
+              <button
+                onClick={() => router.push(`/dashboard?dataset_id=${datasetId}`)}
+                disabled={data.rows.length === 0}
+                className="flex items-center gap-2 px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Analyze Data
+              </button>
+            </div>
           </div>
         </div>
 
