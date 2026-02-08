@@ -4,7 +4,8 @@ from typing import Dict, Optional,List
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Depends, HTTPException
 import uuid
 from io import BytesIO
-from gotrue import Any, BaseModel, List
+from pydantic import BaseModel as PydanticBaseModel
+from typing import Any
 from sqlalchemy.orm import Session
 import supabase
 import polars as pl
@@ -32,7 +33,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-class CleaningConfig(BaseModel):
+class CleaningConfig(PydanticBaseModel):
     """Request body for cleaning operations"""
     deduplicate: Optional[Dict[str, Any]] = None
     missing_values: Optional[Dict[str, Dict[str, Any]]] = None
@@ -40,13 +41,18 @@ class CleaningConfig(BaseModel):
     normalize: Optional[Dict[str, Any]] = None
     detect_anomalies: Optional[Dict[str, Any]] = None
 
-class CleanRequest(BaseModel):
+class CleanRequest(PydanticBaseModel):
     factors: List[str]
     
-class VersionCreateRequest(BaseModel):
+class VersionCreateRequest(PydanticBaseModel):
     """Request to create a new version"""
     version_name: str
     from_version_id: Optional[str] = None  # If None, uses default version
+
+class AnalyzeRequest(PydanticBaseModel):
+    columns: List[Dict[str, Any]]
+    rows: List[Dict[str, Any]]
+    dataset_id: str
  
 def create_dashboard(version_id: str, name: str, schema_analysis: Dict, db: Session):
     """Create dashboard record - FIXED JSON serialization"""
@@ -852,12 +858,6 @@ async def auto_generate_dashboards(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Dashboard generation failed: {str(e)}")
-
-
-class AnalyzeRequest(BaseModel):
-    columns: List[Dict[str, Any]]
-    rows: List[Dict[str, Any]]
-    dataset_id: str
 
 
 @app.post("/data/analyze")
