@@ -13,7 +13,9 @@ import {
   Lightbulb,
   BarChart3,
   SlidersHorizontal,
+  Download,
 } from "lucide-react"
+import { exportDashboardToPDF } from "@/lib/export-pdf"
 import { cn } from "@/lib/utils"
 import {
   LineChart,
@@ -406,6 +408,7 @@ export default function DashboardPage() {
 
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: "idle" })
   const [rawRows, setRawRows] = useState<Record<string, unknown>[]>([])
+  const [isExporting, setIsExporting] = useState(false)
 
   const runAnalysis = useCallback(async () => {
     const storedData = localStorage.getItem("cleanedDataResult")
@@ -470,6 +473,19 @@ export default function DashboardPage() {
       })
     }
   }, [datasetId])
+
+  const handleExportPDF = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const timestamp = new Date().toISOString().split("T")[0]
+      await exportDashboardToPDF("dashboard-content", `data-analysis-report-${timestamp}.pdf`)
+    } catch (error) {
+      console.error("Failed to export PDF:", error)
+      alert("Failed to export PDF. Please try again.")
+    } finally {
+      setIsExporting(false)
+    }
+  }, [])
 
   useEffect(() => {
     runAnalysis()
@@ -547,17 +563,29 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{meta.numeric_columns.length} numeric</span>
-            <span className="text-border">|</span>
-            <span>{meta.categorical_columns.length} categorical</span>
-            <span className="text-border">|</span>
-            <span>{meta.date_columns.length} date</span>
+          <div className="flex flex-col items-end gap-4">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{meta.numeric_columns.length} numeric</span>
+              <span className="text-border">|</span>
+              <span>{meta.categorical_columns.length} categorical</span>
+              <span className="text-border">|</span>
+              <span>{meta.date_columns.length} date</span>
+            </div>
+            <button
+              onClick={handleExportPDF}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-medium rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" />
+              {isExporting ? "Exporting..." : "Export as PDF"}
+            </button>
           </div>
         </div>
 
-        {/* KPI Cards */}
-        <div className={cn("grid gap-4 mb-6", kpis.length <= 3 ? "grid-cols-3" : "grid-cols-4")}>
+        {/* Dashboard Content - Exportable */}
+        <div id="dashboard-content" className="bg-white text-black rounded-lg overflow-hidden">
+          {/* KPI Cards */}
+          <div className={cn("grid gap-4 mb-6 p-6 pt-0", kpis.length <= 3 ? "grid-cols-3" : "grid-cols-4")}>
           {kpis.map((kpi, idx) => (
             <div key={idx} className="p-4 rounded-xl bg-card border border-border">
               <div className="flex items-center justify-between mb-2">
@@ -601,85 +629,87 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* Description */}
-        <div className="p-4 rounded-xl bg-card border border-border mb-6">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-1 h-4 bg-primary rounded" />
-            <span className="text-xs font-semibold tracking-wider">DATA SUMMARY</span>
+          {/* Description */}
+          <div className="p-4 rounded-xl bg-card border border-border mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-1 h-4 bg-primary rounded" />
+              <span className="text-xs font-semibold tracking-wider">DATA SUMMARY</span>
+            </div>
+            <p className="text-muted-foreground italic">{description}</p>
           </div>
-          <p className="text-muted-foreground italic">{description}</p>
-        </div>
 
-        {/* Charts Row 1: first 2 charts + Recommendations */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          {charts.slice(0, 2).map((chart, idx) => (
-            <ChartCard
-              key={`chart-${idx}`}
-              initialChart={chart}
-              rows={rawRows}
-              numericCols={meta.numeric_columns}
-              categoricalCols={meta.categorical_columns}
-              dateCols={meta.date_columns}
-              chartIndex={idx}
-            />
-          ))}
-
-          {/* Recommendations */}
-          <div className="p-4 rounded-xl bg-card border border-border">
-            <h3 className="text-xs font-semibold tracking-wider text-primary mb-4 flex items-center gap-2">
-              <Lightbulb className="w-4 h-4" />
-              RECOMMENDATIONS
-            </h3>
-            <ul className="space-y-3">
-              {recommendations.map((rec, idx) => (
-                <li key={idx} className="flex items-start gap-2">
-                  <span className="w-2 h-2 rounded-full bg-primary mt-1.5 flex-shrink-0" />
-                  <span className="text-sm text-muted-foreground">{rec}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-
-        {/* Charts Row 2: remaining charts */}
-        {charts.length > 2 && (
-          <div
-            className={cn(
-              "grid gap-4 mb-6",
-              charts.length - 2 === 1 ? "grid-cols-1" : "grid-cols-2"
-            )}
-          >
-            {charts.slice(2).map((chart, idx) => (
+          {/* Charts Row 1: first 2 charts + Recommendations */}
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            {charts.slice(0, 2).map((chart, idx) => (
               <ChartCard
-                key={`chart-extra-${idx}`}
+                key={`chart-${idx}`}
                 initialChart={chart}
                 rows={rawRows}
                 numericCols={meta.numeric_columns}
                 categoricalCols={meta.categorical_columns}
                 dateCols={meta.date_columns}
-                chartIndex={idx + 2}
+                chartIndex={idx}
               />
             ))}
-          </div>
-        )}
 
-        {/* Trends */}
-        {trends.length > 0 && (
-          <div className="p-4 rounded-xl bg-card border border-border mb-6">
-            <h3 className="text-xs font-semibold tracking-wider text-foreground mb-4 flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-primary" />
-              KEY TRENDS
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {trends.map((trend, idx) => (
-                <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-secondary/50">
-                  <TrendingUp className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                  <span className="text-sm text-muted-foreground">{trend}</span>
-                </div>
-              ))}
+            {/* Recommendations */}
+            <div className="p-4 rounded-xl bg-card border border-border">
+              <h3 className="text-xs font-semibold tracking-wider text-primary mb-4 flex items-center gap-2">
+                <Lightbulb className="w-4 h-4" />
+                RECOMMENDATIONS
+              </h3>
+              <ul className="space-y-3">
+                {recommendations.map((rec, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary mt-1.5 flex-shrink-0" />
+                    <span className="text-sm text-muted-foreground">{rec}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
-        )}
+
+          {/* Charts Row 2: remaining charts */}
+          {charts.length > 2 && (
+            <div
+              className={cn(
+                "grid gap-4 mb-6",
+                charts.length - 2 === 1 ? "grid-cols-1" : "grid-cols-2"
+              )}
+            >
+              {charts.slice(2).map((chart, idx) => (
+                <ChartCard
+                  key={`chart-extra-${idx}`}
+                  initialChart={chart}
+                  rows={rawRows}
+                  numericCols={meta.numeric_columns}
+                  categoricalCols={meta.categorical_columns}
+                  dateCols={meta.date_columns}
+                  chartIndex={idx + 2}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Trends */}
+          {trends.length > 0 && (
+            <div className="p-4 rounded-xl bg-card border border-border mb-6">
+              <h3 className="text-xs font-semibold tracking-wider text-foreground mb-4 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-primary" />
+                KEY TRENDS
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {trends.map((trend, idx) => (
+                  <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-secondary/50">
+                    <TrendingUp className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                    <span className="text-sm text-muted-foreground">{trend}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* End Dashboard Content */}
       </div>
     </AppLayout>
   )
