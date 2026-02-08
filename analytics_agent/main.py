@@ -4,7 +4,8 @@ from typing import Dict, Optional,List
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Depends, HTTPException
 import uuid
 from io import BytesIO
-from gotrue import Any, BaseModel, List
+from pydantic import BaseModel as PydanticBaseModel
+from typing import Any
 from sqlalchemy.orm import Session
 import supabase
 import polars as pl
@@ -32,7 +33,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-class CleaningConfig(BaseModel):
+class CleaningConfig(PydanticBaseModel):
     """Request body for cleaning operations"""
     deduplicate: Optional[Dict[str, Any]] = None
     missing_values: Optional[Dict[str, Dict[str, Any]]] = None
@@ -40,13 +41,18 @@ class CleaningConfig(BaseModel):
     normalize: Optional[Dict[str, Any]] = None
     detect_anomalies: Optional[Dict[str, Any]] = None
 
-class CleanRequest(BaseModel):
+class CleanRequest(PydanticBaseModel):
     factors: List[str]
     
-class VersionCreateRequest(BaseModel):
+class VersionCreateRequest(PydanticBaseModel):
     """Request to create a new version"""
     version_name: str
     from_version_id: Optional[str] = None  # If None, uses default version
+
+class AnalyzeRequest(PydanticBaseModel):
+    columns: List[Dict[str, Any]]
+    rows: List[Dict[str, Any]]
+    dataset_id: str
  
 def create_dashboard(version_id: str, name: str, schema_analysis: Dict, db: Session):
     """Create dashboard record - FIXED JSON serialization"""
@@ -131,7 +137,8 @@ async def upload_file(
             BytesIO(content),
             truncate_ragged_lines=True,  # Ignores extra columns in "dirty" rows
             infer_schema_length=10000,   # Checks more rows to guess types accurately
-            ignore_errors=True           # Skips lines that are totally broken
+            ignore_errors=True,          # Skips lines that are totally broken
+            encoding="utf8-lossy"        # Handles non-UTF-8 chars (Latin-1, Windows-1252, etc.)
         )
     else:
         reader = lambda: SupabaseDataEngine.handle_excel(content)
@@ -852,3 +859,232 @@ async def auto_generate_dashboards(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Dashboard generation failed: {str(e)}")
+
+
+@app.post("/data/analyze")
+async def analyze_cleaned_data(request: AnalyzeRequest):
+    """
+    Analyze cleaned data and return KPIs, charts, description, trends, and recommendations.
+    Accepts the cleaned data payload from the frontend.
+    """
+    try:
+        columns = request.columns
+        rows = request.rows
+
+        if not columns or not rows:
+            raise HTTPException(status_code=400, detail="No data provided for analysis")
+
+        df = pl.DataFrame(rows)
+        col_keys = [c["key"] for c in columns]
+
+        # Detect column types
+        numeric_cols = [c for c in col_keys if df[c].dtype in (
+            pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+            pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+            pl.Float32, pl.Float64
+        )]
+
+        date_keywords = ["date", "time", "timestamp", "created", "updated", "year", "month"]
+        date_cols = [c for c in col_keys if any(kw in c.lower() for kw in date_keywords)]
+
+        categorical_cols = [
+            c for c in col_keys
+            if c not in numeric_cols and c not in date_cols
+            and 1 < df[c].n_unique() <= 50
+        ]
+
+        # KPIs
+        kpis = []
+        kpis.append({
+            "label": "TOTAL RECORDS",
+            "value": f"{len(df):,}",
+            "change": None,
+            "positive": True,
+            "color": "#00d4ff",
+        })
+
+        for i, col in enumerate(numeric_cols[:3]):
+            values = df[col].drop_nulls()
+            if len(values) == 0:
+                continue
+            total = values.sum()
+            avg = values.mean()
+            if total > 1_000_000:
+                display = f"{total / 1_000_000:.2f}M"
+            elif total > 1_000:
+                display = f"{total / 1_000:.2f}K"
+            else:
+                display = f"{total:.2f}"
+            colors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff"]
+            kpis.append({
+                "label": col.upper().replace("_", " "),
+                "value": display,
+                "change": None,
+                "positive": True,
+                "color": colors[(i + 1) % len(colors)],
+            })
+
+        # Charts
+        charts = []
+        chart_colors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff"]
+
+        # Time-series
+        if date_cols and numeric_cols:
+            date_col = date_cols[0]
+            metric_col = numeric_cols[0]
+            grouped = {}
+            for row in rows:
+                key = str(row.get(date_col, ""))[:7]
+                grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
+            sorted_keys = sorted(grouped.keys())
+            line_data = [{"label": k, "value": round(grouped[k], 2)} for k in sorted_keys[:24]]
+            if len(line_data) > 1:
+                line_vals = [d["value"] for d in line_data]
+                line_max = max(line_vals)
+                line_min = min(line_vals)
+                line_total = sum(line_vals)
+                peak_period = next((d["label"] for d in line_data if d["value"] == line_max), "")
+                low_period = next((d["label"] for d in line_data if d["value"] == line_min), "")
+                charts.append({
+                    "type": "line",
+                    "title": f"{metric_col.replace('_', ' ')} Over Time",
+                    "description": f"Tracks {metric_col.replace('_', ' ')} across {len(line_data)} time periods. Peak of {line_max:,.2f} at {peak_period}, lowest of {line_min:,.2f} at {low_period}. Total: {line_total:,.2f}.",
+                    "data": line_data,
+                    "xKey": "label",
+                    "yKey": "value",
+                    "color": chart_colors[0],
+                })
+
+        # Categorical bar charts
+        for ci, cat_col in enumerate(categorical_cols[:2]):
+            metric_col = numeric_cols[ci % len(numeric_cols)] if numeric_cols else None
+            if not metric_col:
+                break
+            grouped = {}
+            for row in rows:
+                key = str(row.get(cat_col, "Unknown"))
+                grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
+            bar_data = sorted(grouped.items(), key=lambda x: x[1], reverse=True)[:10]
+            bar_total = sum(v for _, v in bar_data)
+            top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
+            top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
+            charts.append({
+                "type": "bar",
+                "title": f"{metric_col.replace('_', ' ')} by {cat_col.replace('_', ' ')}",
+                "description": f"Compares {metric_col.replace('_', ' ')} across {len(bar_data)} {cat_col.replace('_', ' ')} categories. \"{top_name}\" leads with {top_val:,.2f} ({top_pct:.1f}% of shown total). Combined total: {bar_total:,.2f}.",
+                "data": [{"name": k, "value": round(v, 2)} for k, v in bar_data],
+                "xKey": "name",
+                "yKey": "value",
+                "color": chart_colors[(ci + 1) % len(chart_colors)],
+            })
+
+        # Distribution
+        if numeric_cols:
+            col = numeric_cols[0]
+            values = [float(r.get(col, 0) or 0) for r in rows if r.get(col) is not None]
+            if values:
+                min_v, max_v = min(values), max(values)
+                bucket_count = min(10, max(3, int(len(values) ** 0.5)))
+                bucket_size = (max_v - min_v) / bucket_count if max_v != min_v else 1
+                buckets = {}
+                for v in values:
+                    idx = min(int((v - min_v) / bucket_size), bucket_count - 1)
+                    label = f"{round(min_v + idx * bucket_size)}-{round(min_v + (idx + 1) * bucket_size)}"
+                    buckets[label] = buckets.get(label, 0) + 1
+                dist_data = [{"range": k, "count": v} for k, v in buckets.items()]
+                dist_max_count = max(d["count"] for d in dist_data)
+                peak_bucket = next((d["range"] for d in dist_data if d["count"] == dist_max_count), "N/A")
+                dist_total = sum(d["count"] for d in dist_data)
+                charts.append({
+                    "type": "bar",
+                    "title": f"{col.replace('_', ' ')} Distribution",
+                    "description": f"Shows how {col.replace('_', ' ')} values are distributed across {len(dist_data)} buckets. The most common range is {peak_bucket} with {dist_max_count:,} records ({(dist_max_count / dist_total * 100):.1f}%). Values range from {round(min_v):,} to {round(max_v):,}.",
+                    "data": dist_data,
+                    "xKey": "range",
+                    "yKey": "count",
+                    "color": chart_colors[3],
+                })
+
+        # Description
+        desc_parts = [f"This dataset contains {len(df):,} records across {len(col_keys)} columns."]
+        if numeric_cols:
+            col = numeric_cols[0]
+            values = df[col].drop_nulls()
+            if len(values) > 0:
+                desc_parts.append(
+                    f'The primary metric "{col.replace("_", " ")}" ranges from {values.min():,.2f} to {values.max():,.2f}, '
+                    f'with an average of {values.mean():,.2f} and a total of {values.sum():,.2f}.'
+                )
+        description = " ".join(desc_parts)
+
+        # Trends
+        trends = []
+        if categorical_cols and numeric_cols:
+            cat_col = categorical_cols[0]
+            metric_col = numeric_cols[0]
+            grouped = {}
+            for row in rows:
+                key = str(row.get(cat_col, "Unknown"))
+                grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
+            sorted_items = sorted(grouped.items(), key=lambda x: x[1], reverse=True)
+            total = sum(v for _, v in sorted_items)
+            if sorted_items and total > 0:
+                top_pct = (sorted_items[0][1] / total) * 100
+                trends.append(f'"{sorted_items[0][0]}" leads {cat_col.replace("_", " ")} contributing {top_pct:.1f}% of total.')
+            if len(sorted_items) > 1:
+                bot_pct = (sorted_items[-1][1] / total) * 100
+                trends.append(f'"{sorted_items[-1][0]}" is the lowest contributor at {bot_pct:.1f}%.')
+
+        if numeric_cols:
+            col = numeric_cols[0]
+            values = [float(r.get(col, 0) or 0) for r in rows]
+            avg = sum(values) / len(values) if values else 0
+            above = sum(1 for v in values if v > avg)
+            pct = (above / len(values)) * 100 if values else 0
+            trends.append(f"{pct:.1f}% of records have {col.replace('_', ' ')} above the average value.")
+
+        # Recommendations
+        recommendations = []
+        if categorical_cols and numeric_cols:
+            cat_col = categorical_cols[0]
+            metric_col = numeric_cols[0]
+            grouped = {}
+            for row in rows:
+                key = str(row.get(cat_col, "Unknown"))
+                grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
+            sorted_items = sorted(grouped.items(), key=lambda x: x[1], reverse=True)
+            if sorted_items:
+                recommendations.append(
+                    f'Focus on "{sorted_items[0][0]}" in {cat_col.replace("_", " ")} as it drives the highest {metric_col.replace("_", " ")}.'
+                )
+            if len(sorted_items) > 2:
+                recommendations.append(
+                    f'Investigate underperforming categories like "{sorted_items[-1][0]}" for growth opportunities.'
+                )
+        if date_cols:
+            recommendations.append(
+                f'Consider deeper time-series analysis on "{date_cols[0].replace("_", " ")}" to identify seasonal patterns.'
+            )
+        recommendations.append("Export this analysis and share with stakeholders for data-driven decision making.")
+
+        return {
+            "kpis": kpis[:4],
+            "charts": charts,
+            "description": description,
+            "trends": trends[:5],
+            "recommendations": recommendations[:4],
+            "meta": {
+                "total_records": len(df),
+                "numeric_columns": numeric_cols,
+                "categorical_columns": categorical_cols,
+                "date_columns": date_cols,
+                "total_columns": len(col_keys),
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
