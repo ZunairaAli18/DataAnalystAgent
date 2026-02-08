@@ -207,7 +207,7 @@ function ChartCard({
   }, [xCol, yCol, chartType, initialChart, chartData])
 
   return (
-    <div className="p-4 rounded-xl bg-card border border-border flex flex-col max-w-xl">
+    <div className="p-4 rounded-xl bg-card border border-border flex flex-col">
       {/* Chart Header */}
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
