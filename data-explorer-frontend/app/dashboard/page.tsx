@@ -13,7 +13,9 @@ import {
   Lightbulb,
   BarChart3,
   SlidersHorizontal,
+  Download,
 } from "lucide-react"
+import { exportDashboardToPDF } from "@/lib/export-pdf"
 import { cn } from "@/lib/utils"
 import {
   LineChart,
@@ -28,6 +30,12 @@ import {
   PieChart,
   Pie,
   Cell,
+  ComposedChart,
+  ScatterChart,
+  Scatter,
+  Funnel,
+  FunnelChart,
+  Rectangle,
 } from "recharts"
 import Link from "next/link"
 import {
@@ -97,7 +105,7 @@ function recomputeChartData(
   rows: Record<string, unknown>[],
   xCol: string,
   yCol: string,
-  chartType: "line" | "bar" | "pie"
+  chartType: "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap"
 ): Record<string, unknown>[] {
   // Group by X, aggregate Y via SUM
   const grouped: Record<string, number> = {}
@@ -123,7 +131,7 @@ function generateChartDescription(
   data: Record<string, unknown>[],
   xCol: string,
   yCol: string,
-  chartType: "line" | "bar" | "pie"
+  chartType: "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap"
 ): string {
   if (data.length === 0) return "No data available for the selected columns."
 
@@ -167,7 +175,7 @@ function ChartCard({
   dateCols: string[]
   chartIndex: number
 }) {
-  const [chartType, setChartType] = useState<"line" | "bar" | "pie">(initialChart.type)
+  const [chartType, setChartType] = useState<"line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap">(initialChart.type as "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap")
   const [xCol, setXCol] = useState(initialChart.xKey)
   const [yCol, setYCol] = useState(initialChart.yKey)
   const [showFilters, setShowFilters] = useState(false)
@@ -233,14 +241,18 @@ function ChartCard({
             <label className="text-[10px] font-medium text-muted-foreground tracking-wider uppercase">
               Type
             </label>
-            <Select value={chartType} onValueChange={(v) => setChartType(v as "line" | "bar" | "pie")}>
-              <SelectTrigger className="w-[100px] h-8 text-xs bg-card">
+            <Select value={chartType} onValueChange={(v) => setChartType(v as "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap")}>
+              <SelectTrigger className="w-[120px] h-8 text-xs bg-card">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="bar">Bar</SelectItem>
+                <SelectItem value="column">Column</SelectItem>
                 <SelectItem value="line">Line</SelectItem>
                 <SelectItem value="pie">Pie</SelectItem>
+                <SelectItem value="donut">Donut</SelectItem>
+                <SelectItem value="funnel">Funnel</SelectItem>
+                <SelectItem value="heatmap">Heatmap</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -310,8 +322,8 @@ function ChartCard({
       )}
 
       {/* Chart Visualization */}
-      <div className="h-52 flex-1 min-h-0">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-52 flex-1 min-h-0 flex items-center justify-center">
+        <ResponsiveContainer width="100%" height={220} debounce={300}>
           {chartType === "line" ? (
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
@@ -340,6 +352,30 @@ function ChartCard({
                 dot={{ fill: color, r: 3 }}
               />
             </LineChart>
+          ) : chartType === "column" ? (
+            <BarChart data={chartData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
+              <XAxis type="number" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis 
+                type="category"
+                dataKey={xDataKey}
+                tick={{ fill: "#6b7280", fontSize: 9 }}
+                axisLine={false}
+                tickLine={false}
+                width={80}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+                labelStyle={{ color: "#94a3b8" }}
+                cursor={{ fill: "transparent" }}
+              />
+              <Bar dataKey={yDataKey} fill={color} radius={[0, 4, 4, 0]} />
+            </BarChart>
           ) : chartType === "pie" ? (
             <PieChart>
               <Pie
@@ -368,6 +404,82 @@ function ChartCard({
                 }}
               />
             </PieChart>
+          ) : chartType === "donut" ? (
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={60}
+                outerRadius={85}
+                dataKey={yDataKey}
+                nameKey={xDataKey}
+                label={({ name, percent }) =>
+                  `${String(name).substring(0, 12)} ${(percent * 100).toFixed(0)}%`
+                }
+                labelLine={false}
+              >
+                {chartData.map((_, i) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+              />
+            </PieChart>
+          ) : chartType === "funnel" ? (
+            <FunnelChart>
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+              />
+              <Funnel
+                data={chartData.sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0))}
+                dataKey={yDataKey}
+                nameKey={xDataKey}
+              >
+                {chartData.map((_, i) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Funnel>
+            </FunnelChart>
+          ) : chartType === "heatmap" ? (
+            <ScatterChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 80 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
+              <XAxis
+                type="category"
+                dataKey={xDataKey}
+                tick={{ fill: "#6b7280", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                type="number"
+                dataKey={yDataKey}
+                tick={{ fill: "#6b7280", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+                labelStyle={{ color: "#94a3b8" }}
+              />
+              <Scatter dataKey={yDataKey} fill={color} />
+            </ScatterChart>
           ) : (
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
@@ -406,6 +518,7 @@ export default function DashboardPage() {
 
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: "idle" })
   const [rawRows, setRawRows] = useState<Record<string, unknown>[]>([])
+  const [isExporting, setIsExporting] = useState(false)
 
   const runAnalysis = useCallback(async () => {
     const storedData = localStorage.getItem("cleanedDataResult")
@@ -470,6 +583,19 @@ export default function DashboardPage() {
       })
     }
   }, [datasetId])
+
+  const handleExportPDF = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const timestamp = new Date().toISOString().split("T")[0]
+      await exportDashboardToPDF("dashboard-content", `data-analysis-report-${timestamp}.pdf`)
+    } catch (error) {
+      console.error("Failed to export PDF:", error)
+      alert("Failed to export PDF. Please try again.")
+    } finally {
+      setIsExporting(false)
+    }
+  }, [])
 
   useEffect(() => {
     runAnalysis()
@@ -547,17 +673,29 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{meta.numeric_columns.length} numeric</span>
-            <span className="text-border">|</span>
-            <span>{meta.categorical_columns.length} categorical</span>
-            <span className="text-border">|</span>
-            <span>{meta.date_columns.length} date</span>
+          <div className="flex flex-col items-end gap-4">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{meta.numeric_columns.length} numeric</span>
+              <span className="text-border">|</span>
+              <span>{meta.categorical_columns.length} categorical</span>
+              <span className="text-border">|</span>
+              <span>{meta.date_columns.length} date</span>
+            </div>
+            <button
+              onClick={handleExportPDF}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground font-medium rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" />
+              {isExporting ? "Exporting..." : "Export as PDF"}
+            </button>
           </div>
         </div>
 
-        {/* KPI Cards */}
-        <div className={cn("grid gap-4 mb-6", kpis.length <= 3 ? "grid-cols-3" : "grid-cols-4")}>
+        {/* Dashboard Content - Exportable */}
+        <div id="dashboard-content">
+          {/* KPI Cards */}
+          <div className={cn("grid gap-4 mb-6", kpis.length <= 3 ? "grid-cols-3" : "grid-cols-4")}>
           {kpis.map((kpi, idx) => (
             <div key={idx} className="p-4 rounded-xl bg-card border border-border">
               <div className="flex items-center justify-between mb-2">
@@ -601,85 +739,87 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* Description */}
-        <div className="p-4 rounded-xl bg-card border border-border mb-6">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-1 h-4 bg-primary rounded" />
-            <span className="text-xs font-semibold tracking-wider">DATA SUMMARY</span>
+          {/* Description */}
+          <div className="p-4 rounded-xl bg-card border border-border mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-1 h-4 bg-primary rounded" />
+              <span className="text-xs font-semibold tracking-wider">DATA SUMMARY</span>
+            </div>
+            <p className="text-muted-foreground italic">{description}</p>
           </div>
-          <p className="text-muted-foreground italic">{description}</p>
-        </div>
 
-        {/* Charts Row 1: first 2 charts + Recommendations */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          {charts.slice(0, 2).map((chart, idx) => (
-            <ChartCard
-              key={`chart-${idx}`}
-              initialChart={chart}
-              rows={rawRows}
-              numericCols={meta.numeric_columns}
-              categoricalCols={meta.categorical_columns}
-              dateCols={meta.date_columns}
-              chartIndex={idx}
-            />
-          ))}
-
-          {/* Recommendations */}
-          <div className="p-4 rounded-xl bg-card border border-border">
-            <h3 className="text-xs font-semibold tracking-wider text-primary mb-4 flex items-center gap-2">
-              <Lightbulb className="w-4 h-4" />
-              RECOMMENDATIONS
-            </h3>
-            <ul className="space-y-3">
-              {recommendations.map((rec, idx) => (
-                <li key={idx} className="flex items-start gap-2">
-                  <span className="w-2 h-2 rounded-full bg-primary mt-1.5 flex-shrink-0" />
-                  <span className="text-sm text-muted-foreground">{rec}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-
-        {/* Charts Row 2: remaining charts */}
-        {charts.length > 2 && (
-          <div
-            className={cn(
-              "grid gap-4 mb-6",
-              charts.length - 2 === 1 ? "grid-cols-1" : "grid-cols-2"
-            )}
-          >
-            {charts.slice(2).map((chart, idx) => (
+          {/* Charts Row 1: first 2 charts + Recommendations */}
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            {charts.slice(0, 2).map((chart, idx) => (
               <ChartCard
-                key={`chart-extra-${idx}`}
+                key={`chart-${idx}`}
                 initialChart={chart}
                 rows={rawRows}
                 numericCols={meta.numeric_columns}
                 categoricalCols={meta.categorical_columns}
                 dateCols={meta.date_columns}
-                chartIndex={idx + 2}
+                chartIndex={idx}
               />
             ))}
-          </div>
-        )}
 
-        {/* Trends */}
-        {trends.length > 0 && (
-          <div className="p-4 rounded-xl bg-card border border-border mb-6">
-            <h3 className="text-xs font-semibold tracking-wider text-foreground mb-4 flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-primary" />
-              KEY TRENDS
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {trends.map((trend, idx) => (
-                <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-secondary/50">
-                  <TrendingUp className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                  <span className="text-sm text-muted-foreground">{trend}</span>
-                </div>
-              ))}
+            {/* Recommendations */}
+            <div className="p-4 rounded-xl bg-card border border-border">
+              <h3 className="text-xs font-semibold tracking-wider text-primary mb-4 flex items-center gap-2">
+                <Lightbulb className="w-4 h-4" />
+                RECOMMENDATIONS
+              </h3>
+              <ul className="space-y-3">
+                {recommendations.map((rec, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary mt-1.5 flex-shrink-0" />
+                    <span className="text-sm text-muted-foreground">{rec}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
-        )}
+
+          {/* Charts Row 2: remaining charts */}
+          {charts.length > 2 && (
+            <div
+              className={cn(
+                "grid gap-4 mb-6",
+                charts.length - 2 === 1 ? "grid-cols-1" : "grid-cols-2"
+              )}
+            >
+              {charts.slice(2).map((chart, idx) => (
+                <ChartCard
+                  key={`chart-extra-${idx}`}
+                  initialChart={chart}
+                  rows={rawRows}
+                  numericCols={meta.numeric_columns}
+                  categoricalCols={meta.categorical_columns}
+                  dateCols={meta.date_columns}
+                  chartIndex={idx + 2}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Trends */}
+          {trends.length > 0 && (
+            <div className="p-4 rounded-xl bg-card border border-border mb-6">
+              <h3 className="text-xs font-semibold tracking-wider text-foreground mb-4 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-primary" />
+                KEY TRENDS
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {trends.map((trend, idx) => (
+                  <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-secondary/50">
+                    <TrendingUp className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                    <span className="text-sm text-muted-foreground">{trend}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* End Dashboard Content */}
       </div>
     </AppLayout>
   )
