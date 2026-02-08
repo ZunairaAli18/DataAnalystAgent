@@ -7,44 +7,38 @@ export async function exportDashboardToPDF(elementId: string, fileName: string =
       throw new Error(`Element with ID "${elementId}" not found`)
     }
 
-    // Dynamically import html2canvas and jsPDF (client-side only)
-    const html2canvas = (await import("html2canvas")).default
-    const { jsPDF } = await import("jspdf")
+    // Get the HTML content of the dashboard
+    const html = element.outerHTML
 
-    // Capture the element as a canvas with proper styling
-    const canvas = await html2canvas(element, {
-      allowTaint: true,
-      useCORS: true,
-      scale: 2,
-      backgroundColor: "#ffffff",
-      logging: false,
+    // Call the API endpoint to generate PDF
+    const response = await fetch('/api/export-pdf', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        html,
+        fileName,
+      }),
     })
 
-    const imgData = canvas.toDataURL("image/png")
-    const imgWidth = 210 // A4 width in mm
-    const imgHeight = (canvas.height * imgWidth) / canvas.width
-    
-    const pdf = new jsPDF({
-      orientation: "portrait",
-      unit: "mm",
-      format: "a4",
-    })
-
-    let heightLeft = imgHeight
-    let position = 0
-
-    // Add images to PDF, creating new pages as needed
-    while (heightLeft >= 0) {
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
-      heightLeft -= 297 // A4 height in mm
-      if (heightLeft >= 0) {
-        pdf.addPage()
-        position = heightLeft - imgHeight
-      }
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to generate PDF')
     }
 
-    // Save the PDF with the provided filename
-    pdf.save(fileName)
+    // Get the PDF blob
+    const blob = await response.blob()
+
+    // Create a download link and trigger download
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
   } catch (error) {
     console.error("Error exporting PDF:", error)
     throw error
