@@ -207,7 +207,7 @@ function ChartCard({
   }, [xCol, yCol, chartType, initialChart, chartData])
 
   return (
-    <div className="p-4 rounded-xl bg-card border border-border flex flex-col">
+    <div className="p-4 rounded-xl bg-card border border-border flex flex-col max-w-xl">
       {/* Chart Header */}
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
@@ -312,8 +312,8 @@ function ChartCard({
       )}
 
       {/* Chart Visualization */}
-      <div className="h-52 flex-1 min-h-0">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-52 flex-1 min-h-0 flex items-center justify-center">
+        <ResponsiveContainer width="100%" height={220} debounce={300}>
           {chartType === "line" ? (
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
