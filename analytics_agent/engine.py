@@ -68,14 +68,23 @@ class SupabaseDataEngine:
         
         # 1. Missing Values Detection
         for col in df.columns:
-            null_count = df[col].null_count()
-            if null_count > 0:
-                anomalies.append({
-                    "type": "missing_values",
-                    "column": col,
-                    "count": null_count,
-                    "description": "Missing/null values detected"
-                })
+          series = df[col]
+
+          if series.dtype == pl.Utf8:
+            missing_count = (
+              series.null_count() +
+              series.str.strip_chars().eq("").sum()
+            )
+          else:
+            missing_count = series.null_count()
+
+          if missing_count > 0:
+            anomalies.append({
+            "type": "missing_values",
+            "column": col,
+            "count": int(missing_count),
+            "description": "Missing, null, or empty values detected"
+           })
         
         # 2. Numeric Outliers Detection (using IQR method)
         numeric_cols = [col for col in df.columns if df[col].dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]]
@@ -186,16 +195,27 @@ class SupabaseDataEngine:
                 continue
             
             # Check if values look numeric but stored as string
-            numeric_pattern = r'^-?\d+\.?\d*$'
-            numeric_like_count = col_data.str.contains(numeric_pattern).sum()
+            numeric_pattern = r'^-?\d+(\.\d+)?$'
+            phone_pattern = r'^(\+?\d{1,3})?\d{7,15}$'
+            cnic_pattern = r'^\d{5}-\d{7}-\d{1}$'
             
-            if numeric_like_count > 0 and numeric_like_count < len(col_data):
-                anomalies.append({
-                    "type": "mixed_types",
-                    "column": col,
-                    "count": len(col_data) - numeric_like_count,
-                    "description": "Mixed data types (numbers and text in same column)"
-                })
+            numeric_like = col_data.str.contains(numeric_pattern)
+            phone_like = col_data.str.contains(phone_pattern)
+            cnic_like = col_data.str.contains(cnic_pattern)
+            
+            numeric_like_count = (numeric_like & ~phone_like).sum()
+            phone_like_count = phone_like.sum()
+            cnic_like_count = cnic_like.sum()
+            
+            text_like_count = len(col_data) - numeric_like_count - phone_like_count - cnic_like_count
+            
+            if numeric_like_count > 0 and text_like_count > 0:
+              anomalies.append({
+                  "type": "mixed_types",
+                  "column": col,
+                  "count": text_like_count,
+                  "description": "Mixed numeric and text values (excluding phone numbers and cnics)"
+              })
         
         # 6. Duplicate Values in Key-like Columns (columns with mostly unique values)
         for col in df.columns:
@@ -251,10 +271,40 @@ class SupabaseDataEngine:
         
         # Apply cleaning based on selected factors
         if "missing_values" in factors:
-            before = df.height
-            df = df.drop_nulls()
-            removed = before - df.height
-            cleaning_summary.append(f"Removed {removed} rows with missing values")
+            for col in df.columns:
+                if df[col].null_count() == 0:
+                    continue
+
+                dtype = df[col].dtype
+
+                # Numeric → median
+                if dtype in (
+                    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+                    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+                    pl.Float32, pl.Float64
+                ):
+                    median_val = df[col].median()
+                    if median_val is not None:
+                        df = df.with_columns(
+                            pl.col(col).fill_null(median_val)
+                        )
+
+                # Categorical → mode
+                else:
+                    mode_df = df.select(pl.col(col).mode())
+                    if mode_df.height > 0:
+                        mode_val = mode_df.item(0, 0)
+                        if mode_val is not None:
+                        # Convert mode_val to match column type
+                           if dtype in (pl.Categorical, pl.Utf8):
+                              mode_val = str(mode_val)
+                           df = df.with_columns(
+                            pl.col(col).fill_null(mode_val)
+                            )
+
+            cleaning_summary.append(
+                "Filled missing values (numeric → median, categorical → mode)"
+            )
         
         if "duplicate_rows" in factors:
             before = df.height
@@ -304,7 +354,31 @@ class SupabaseDataEngine:
             cleaning_summary.append("Standardized date formats to ISO (YYYY-MM-DD)")
         
         if "mixed_types" in factors:
-            cleaning_summary.append("Handled mixed type columns")
+            phone_pattern = r'^(\+?\d{1,3})?\d{7,15}$'
+            cnic_pattern = r'^\d{5}-\d{7}-\d{1}$'
+            currency_pattern = r'[$€£¥₹₽,]'
+            numeric_pattern = r'^-?\d+(\.\d+)?$'
+
+            string_cols = [col for col in df.columns if df[col].dtype == pl.Utf8]
+
+            for col in string_cols:
+                df = df.with_columns(
+                    pl.when(
+                        pl.col(col).str.contains(phone_pattern) |
+                        pl.col(col).str.contains(cnic_pattern)
+                    )
+                    .then(pl.col(col))
+                    .otherwise(
+                        pl.col(col)
+                        .str.replace_all(currency_pattern, '')
+                        .str.strip_chars()
+                    )
+                    .alias(col)
+                )
+
+            cleaning_summary.append(
+                "Handled mixed type columns (kept phone numbers & CNICs, cleaned currency values)"
+            )
         
         # # Save cleaned dataset
         cleaned_id = f"{dataset_id}_cleaned"

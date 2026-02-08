@@ -284,7 +284,13 @@ async def clean_data(dataset_id: str, request: CleanRequest):
             "cleaning_summary": result["summary"]
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clean data: {str(e)}")
+      import traceback
+      traceback.print_exc()
+      raise HTTPException(
+        status_code=500,
+        detail=str(e)
+      )
+
 
 # 3. Export endpoint (optional)
 @app.get("/data/{dataset_id}/export")
