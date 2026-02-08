@@ -30,6 +30,12 @@ import {
   PieChart,
   Pie,
   Cell,
+  ComposedChart,
+  ScatterChart,
+  Scatter,
+  Funnel,
+  FunnelChart,
+  Rectangle,
 } from "recharts"
 import Link from "next/link"
 import {
@@ -99,7 +105,7 @@ function recomputeChartData(
   rows: Record<string, unknown>[],
   xCol: string,
   yCol: string,
-  chartType: "line" | "bar" | "pie"
+  chartType: "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap"
 ): Record<string, unknown>[] {
   // Group by X, aggregate Y via SUM
   const grouped: Record<string, number> = {}
@@ -125,7 +131,7 @@ function generateChartDescription(
   data: Record<string, unknown>[],
   xCol: string,
   yCol: string,
-  chartType: "line" | "bar" | "pie"
+  chartType: "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap"
 ): string {
   if (data.length === 0) return "No data available for the selected columns."
 
@@ -169,7 +175,7 @@ function ChartCard({
   dateCols: string[]
   chartIndex: number
 }) {
-  const [chartType, setChartType] = useState<"line" | "bar" | "pie">(initialChart.type)
+  const [chartType, setChartType] = useState<"line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap">(initialChart.type as "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap")
   const [xCol, setXCol] = useState(initialChart.xKey)
   const [yCol, setYCol] = useState(initialChart.yKey)
   const [showFilters, setShowFilters] = useState(false)
@@ -235,14 +241,18 @@ function ChartCard({
             <label className="text-[10px] font-medium text-muted-foreground tracking-wider uppercase">
               Type
             </label>
-            <Select value={chartType} onValueChange={(v) => setChartType(v as "line" | "bar" | "pie")}>
-              <SelectTrigger className="w-[100px] h-8 text-xs bg-card">
+            <Select value={chartType} onValueChange={(v) => setChartType(v as "line" | "bar" | "pie" | "column" | "donut" | "funnel" | "heatmap")}>
+              <SelectTrigger className="w-[120px] h-8 text-xs bg-card">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="bar">Bar</SelectItem>
+                <SelectItem value="column">Column</SelectItem>
                 <SelectItem value="line">Line</SelectItem>
                 <SelectItem value="pie">Pie</SelectItem>
+                <SelectItem value="donut">Donut</SelectItem>
+                <SelectItem value="funnel">Funnel</SelectItem>
+                <SelectItem value="heatmap">Heatmap</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -342,6 +352,30 @@ function ChartCard({
                 dot={{ fill: color, r: 3 }}
               />
             </LineChart>
+          ) : chartType === "column" ? (
+            <BarChart data={chartData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
+              <XAxis type="number" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis 
+                type="category"
+                dataKey={xDataKey}
+                tick={{ fill: "#6b7280", fontSize: 9 }}
+                axisLine={false}
+                tickLine={false}
+                width={80}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+                labelStyle={{ color: "#94a3b8" }}
+                cursor={{ fill: "transparent" }}
+              />
+              <Bar dataKey={yDataKey} fill={color} radius={[0, 4, 4, 0]} />
+            </BarChart>
           ) : chartType === "pie" ? (
             <PieChart>
               <Pie
@@ -370,6 +404,82 @@ function ChartCard({
                 }}
               />
             </PieChart>
+          ) : chartType === "donut" ? (
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={60}
+                outerRadius={85}
+                dataKey={yDataKey}
+                nameKey={xDataKey}
+                label={({ name, percent }) =>
+                  `${String(name).substring(0, 12)} ${(percent * 100).toFixed(0)}%`
+                }
+                labelLine={false}
+              >
+                {chartData.map((_, i) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+              />
+            </PieChart>
+          ) : chartType === "funnel" ? (
+            <FunnelChart>
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+              />
+              <Funnel
+                data={chartData.sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0))}
+                dataKey={yDataKey}
+                nameKey={xDataKey}
+              >
+                {chartData.map((_, i) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Funnel>
+            </FunnelChart>
+          ) : chartType === "heatmap" ? (
+            <ScatterChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 80 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
+              <XAxis
+                type="category"
+                dataKey={xDataKey}
+                tick={{ fill: "#6b7280", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                type="number"
+                dataKey={yDataKey}
+                tick={{ fill: "#6b7280", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(210 45% 10%)",
+                  border: "1px solid hsl(210 30% 20%)",
+                  borderRadius: 8,
+                  color: "#e2e8f0",
+                }}
+                labelStyle={{ color: "#94a3b8" }}
+              />
+              <Scatter dataKey={yDataKey} fill={color} />
+            </ScatterChart>
           ) : (
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(210 30% 20%)" />
