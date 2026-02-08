@@ -2,13 +2,14 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Upload, Table, BarChart3, MessageSquare, ExternalLink, Database } from "lucide-react"
+import { Upload, Table, BarChart3, MessageSquare, ExternalLink, Database, TrendingUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
   { href: "/ingestion", label: "Ingestion", icon: Upload },
   { href: "/view-data", label: "View Data", icon: Table },
   { href: "/cleaned-data", label: "Cleaned Data", icon: Database },
+  { href: "/column-analysis", label: "Column Analysis", icon: TrendingUp },
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/ai-analyst", label: "AI Analyst", icon: MessageSquare },
 ]

@@ -846,3 +846,78 @@ async def auto_generate_dashboards(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Dashboard generation failed: {str(e)}")
+
+
+# --- COLUMN ANALYSIS ENDPOINTS ---
+from column_analyzer import ColumnAnalyzer
+
+@app.get("/data/{dataset_id}/column/{column_name}/analysis")
+async def analyze_column(dataset_id: str, column_name: str):
+    """
+    Analyze a specific column and return:
+    - Description of the column
+    - Key insights
+    - Recommendations
+    - Graph data for visualization
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        # Read dataset
+        df = pl.read_parquet(
+            s3_path, 
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Check if column exists
+        if column_name not in df.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{column_name}' not found in dataset")
+        
+        # Analyze the column
+        insight = ColumnAnalyzer.analyze_column(df, column_name)
+        
+        return {
+            "column_name": insight.column_name,
+            "data_type": insight.data_type,
+            "description": insight.description,
+            "insights": insight.insights,
+            "recommendations": insight.recommendations,
+            "graph_type": insight.graph_type,
+            "graph_data": insight.graph_data,
+            "statistics": insight.statistics
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to analyze column: {str(e)}")
+
+
+@app.get("/data/{dataset_id}/columns/analysis")
+async def analyze_all_columns(dataset_id: str):
+    """
+    Analyze all columns in the dataset and return analysis for each.
+    Returns a list of column analyses with graphs, descriptions, insights, and recommendations.
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        # Read dataset
+        df = pl.read_parquet(
+            s3_path, 
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Analyze all columns
+        analyses = ColumnAnalyzer.analyze_all_columns(df)
+        
+        return {
+            "dataset_id": dataset_id,
+            "total_columns": len(analyses),
+            "columns": analyses
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to analyze columns: {str(e)}")
