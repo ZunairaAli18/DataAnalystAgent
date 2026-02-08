@@ -51,6 +51,7 @@ interface KPI {
 interface ChartConfig {
   type: "line" | "bar" | "pie"
   title: string
+  description?: string
   data: Record<string, unknown>[]
   xKey: string
   yKey: string
@@ -118,6 +119,37 @@ function recomputeChartData(
   }))
 }
 
+function generateChartDescription(
+  data: Record<string, unknown>[],
+  xCol: string,
+  yCol: string,
+  chartType: "line" | "bar" | "pie"
+): string {
+  if (data.length === 0) return "No data available for the selected columns."
+
+  const nameKey = "name"
+  const valueKey = "value"
+  const values = data.map((d) => Number(d[valueKey]) || 0)
+  const total = values.reduce((a, b) => a + b, 0)
+  const max = Math.max(...values)
+  const min = Math.min(...values)
+  const peakItem = data.find((d) => Number(d[valueKey]) === max)
+  const lowItem = data.find((d) => Number(d[valueKey]) === min)
+  const peakLabel = String(peakItem?.[nameKey] ?? "N/A")
+  const lowLabel = String(lowItem?.[nameKey] ?? "N/A")
+
+  if (chartType === "line") {
+    return `Tracks ${yCol.replace(/_/g, " ")} over ${data.length} periods of ${xCol.replace(/_/g, " ")}. Peak of ${max.toLocaleString()} at "${peakLabel}", lowest of ${min.toLocaleString()} at "${lowLabel}". Total: ${total.toLocaleString()}.`
+  }
+  if (chartType === "pie") {
+    const topPct = total > 0 ? ((max / total) * 100).toFixed(1) : "0"
+    return `Shows proportional breakdown of ${yCol.replace(/_/g, " ")} across ${data.length} ${xCol.replace(/_/g, " ")} segments. "${peakLabel}" holds the largest share at ${topPct}% (${max.toLocaleString()}).`
+  }
+  // bar
+  const topPct = total > 0 ? ((max / total) * 100).toFixed(1) : "0"
+  return `Compares ${yCol.replace(/_/g, " ")} across ${data.length} ${xCol.replace(/_/g, " ")} categories. "${peakLabel}" leads with ${max.toLocaleString()} (${topPct}% of shown total). Combined total: ${total.toLocaleString()}.`
+}
+
 /* ──────── ChartCard Component ──────── */
 
 function ChartCard({
@@ -163,6 +195,14 @@ function ChartCard({
 
   const xDataKey = xCol === initialChart.xKey && yCol === initialChart.yKey ? initialChart.xKey : "name"
   const yDataKey = xCol === initialChart.xKey && yCol === initialChart.yKey ? initialChart.yKey : "value"
+
+  // Chart description: use server-provided one if axes unchanged, else generate dynamically
+  const chartDescription = useMemo(() => {
+    if (xCol === initialChart.xKey && yCol === initialChart.yKey && chartType === initialChart.type) {
+      return initialChart.description || ""
+    }
+    return generateChartDescription(chartData, xCol, yCol, chartType)
+  }, [xCol, yCol, chartType, initialChart, chartData])
 
   return (
     <div className="p-4 rounded-xl bg-card border border-border flex flex-col">
@@ -260,6 +300,13 @@ function ChartCard({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Chart Description */}
+      {chartDescription && (
+        <p className="text-xs text-muted-foreground italic mb-3 leading-relaxed">
+          {chartDescription}
+        </p>
       )}
 
       {/* Chart Visualization */}

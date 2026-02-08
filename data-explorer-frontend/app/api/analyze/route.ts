@@ -27,6 +27,7 @@ interface KPI {
 interface ChartData {
   type: "line" | "bar" | "pie"
   title: string
+  description: string
   data: Record<string, unknown>[]
   xKey: string
   yKey: string
@@ -168,9 +169,16 @@ function generateCharts(
     }))
 
     if (lineData.length > 1) {
+      const lineValues = lineData.map((d) => d.value)
+      const lineMax = Math.max(...lineValues)
+      const lineMin = Math.min(...lineValues)
+      const lineTotal = lineValues.reduce((a, b) => a + b, 0)
+      const peakPeriod = lineData.find((d) => d.value === lineMax)?.label ?? ""
+      const lowPeriod = lineData.find((d) => d.value === lineMin)?.label ?? ""
       charts.push({
         type: "line",
         title: `${metricCol.replace(/_/g, " ")} Over Time`,
+        description: `Tracks ${metricCol.replace(/_/g, " ")} across ${lineData.length} time periods. Peak of ${lineMax.toLocaleString()} at ${peakPeriod}, lowest of ${lineMin.toLocaleString()} at ${lowPeriod}. Total: ${lineTotal.toLocaleString()}.`,
         data: lineData,
         xKey: "label",
         yKey: "value",
@@ -199,9 +207,14 @@ function generateCharts(
         value: Math.round(value * 100) / 100,
       }))
 
+    const barTotal = barData.reduce((a, b) => a + b.value, 0)
+    const topCategory = barData[0]
+    const topPct = barTotal > 0 ? ((topCategory.value / barTotal) * 100).toFixed(1) : "0"
+
     charts.push({
       type: "bar",
       title: `${metricCol.replace(/_/g, " ")} by ${catCol.replace(/_/g, " ")}`,
+      description: `Compares ${metricCol.replace(/_/g, " ")} across ${barData.length} ${catCol.replace(/_/g, " ")} categories. "${topCategory.name}" leads with ${topCategory.value.toLocaleString()} (${topPct}% of shown total). Total across top ${barData.length}: ${barTotal.toLocaleString()}.`,
       data: barData,
       xKey: "name",
       yKey: "value",
@@ -221,7 +234,7 @@ function generateCharts(
       grouped[key] += Number(row[metricCol]) || 0
     })
 
-    const barData = Object.entries(grouped)
+    const barData2 = Object.entries(grouped)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([name, value]) => ({
@@ -229,10 +242,15 @@ function generateCharts(
         value: Math.round(value * 100) / 100,
       }))
 
+    const barTotal2 = barData2.reduce((a, b) => a + b.value, 0)
+    const topCat2 = barData2[0]
+    const topPct2 = barTotal2 > 0 ? ((topCat2.value / barTotal2) * 100).toFixed(1) : "0"
+
     charts.push({
       type: "bar",
       title: `${metricCol.replace(/_/g, " ")} by ${catCol.replace(/_/g, " ")}`,
-      data: barData,
+      description: `Breaks down ${metricCol.replace(/_/g, " ")} by ${barData2.length} ${catCol.replace(/_/g, " ")} segments. "${topCat2.name}" is the top contributor at ${topCat2.value.toLocaleString()} (${topPct2}%). Combined total: ${barTotal2.toLocaleString()}.`,
+      data: barData2,
       xKey: "name",
       yKey: "value",
       color: chartColors[2],
@@ -265,9 +283,14 @@ function generateCharts(
         count,
       }))
 
+      const distMax = Math.max(...distData.map((d) => d.count))
+      const peakBucket = distData.find((d) => d.count === distMax)
+      const distTotal = distData.reduce((a, b) => a + b.count, 0)
+
       charts.push({
         type: "bar",
         title: `${col.replace(/_/g, " ")} Distribution`,
+        description: `Shows how ${col.replace(/_/g, " ")} values are distributed across ${distData.length} buckets. The most common range is ${peakBucket?.range ?? "N/A"} with ${distMax.toLocaleString()} records (${distTotal > 0 ? ((distMax / distTotal) * 100).toFixed(1) : 0}%). Values range from ${Math.round(min).toLocaleString()} to ${Math.round(max).toLocaleString()}.`,
         data: distData,
         xKey: "range",
         yKey: "count",

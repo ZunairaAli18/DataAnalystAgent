@@ -939,9 +939,16 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             sorted_keys = sorted(grouped.keys())
             line_data = [{"label": k, "value": round(grouped[k], 2)} for k in sorted_keys[:24]]
             if len(line_data) > 1:
+                line_vals = [d["value"] for d in line_data]
+                line_max = max(line_vals)
+                line_min = min(line_vals)
+                line_total = sum(line_vals)
+                peak_period = next((d["label"] for d in line_data if d["value"] == line_max), "")
+                low_period = next((d["label"] for d in line_data if d["value"] == line_min), "")
                 charts.append({
                     "type": "line",
                     "title": f"{metric_col.replace('_', ' ')} Over Time",
+                    "description": f"Tracks {metric_col.replace('_', ' ')} across {len(line_data)} time periods. Peak of {line_max:,.2f} at {peak_period}, lowest of {line_min:,.2f} at {low_period}. Total: {line_total:,.2f}.",
                     "data": line_data,
                     "xKey": "label",
                     "yKey": "value",
@@ -958,9 +965,13 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                 key = str(row.get(cat_col, "Unknown"))
                 grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
             bar_data = sorted(grouped.items(), key=lambda x: x[1], reverse=True)[:10]
+            bar_total = sum(v for _, v in bar_data)
+            top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
+            top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
             charts.append({
                 "type": "bar",
                 "title": f"{metric_col.replace('_', ' ')} by {cat_col.replace('_', ' ')}",
+                "description": f"Compares {metric_col.replace('_', ' ')} across {len(bar_data)} {cat_col.replace('_', ' ')} categories. \"{top_name}\" leads with {top_val:,.2f} ({top_pct:.1f}% of shown total). Combined total: {bar_total:,.2f}.",
                 "data": [{"name": k, "value": round(v, 2)} for k, v in bar_data],
                 "xKey": "name",
                 "yKey": "value",
@@ -980,10 +991,15 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     idx = min(int((v - min_v) / bucket_size), bucket_count - 1)
                     label = f"{round(min_v + idx * bucket_size)}-{round(min_v + (idx + 1) * bucket_size)}"
                     buckets[label] = buckets.get(label, 0) + 1
+                dist_data = [{"range": k, "count": v} for k, v in buckets.items()]
+                dist_max_count = max(d["count"] for d in dist_data)
+                peak_bucket = next((d["range"] for d in dist_data if d["count"] == dist_max_count), "N/A")
+                dist_total = sum(d["count"] for d in dist_data)
                 charts.append({
                     "type": "bar",
                     "title": f"{col.replace('_', ' ')} Distribution",
-                    "data": [{"range": k, "count": v} for k, v in buckets.items()],
+                    "description": f"Shows how {col.replace('_', ' ')} values are distributed across {len(dist_data)} buckets. The most common range is {peak_bucket} with {dist_max_count:,} records ({(dist_max_count / dist_total * 100):.1f}%). Values range from {round(min_v):,} to {round(max_v):,}.",
+                    "data": dist_data,
                     "xKey": "range",
                     "yKey": "count",
                     "color": chart_colors[3],
