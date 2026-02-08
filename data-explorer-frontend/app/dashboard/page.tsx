@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useSearchParams } from "next/navigation"
 import { AppLayout } from "@/components/app-layout"
-import { Info, TrendingUp, TrendingDown } from "lucide-react"
+import { Info, TrendingUp, TrendingDown, Loader2, AlertCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   LineChart,
@@ -15,70 +16,83 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts"
+import { fetchDashboardData } from "@/lib/dashboard-api"
 
 const viewTabs = ["OVERVIEW", "REGIONAL", "PRODUCT", "FORECAST"]
 
-const kpiCards = [
-  {
-    label: "SALES",
-    currentValue: "733.22K",
-    previousValue: "PY 609.21K",
-    change: 20.36,
-    positive: true,
-    sparkColor: "#00d4ff",
-  },
-  {
-    label: "PROFIT",
-    currentValue: "93.44K",
-    previousValue: "PY 81.80K",
-    change: 14.24,
-    positive: true,
-    sparkColor: "#ff3d71",
-  },
-  {
-    label: "ORDERS",
-    currentValue: "3312",
-    previousValue: "PY 2587",
-    change: 28.02,
-    positive: true,
-    sparkColor: "#ff3d71",
-  },
-  {
-    label: "RETURNS",
-    currentValue: "289",
-    previousValue: "PY 197",
-    change: 46.70,
-    positive: false,
-    sparkColor: "#ffaa00",
-  },
-]
+interface KPICard {
+  label: string
+  currentValue: string
+  previousValue: string
+  change: number
+  positive: boolean
+  sparkColor: string
+}
 
-const revenueData = [
-  { month: "Jan", value: 6500 },
-  { month: "Feb", value: 8000 },
-  { month: "Mar", value: 12000 },
-  { month: "Apr", value: 15000 },
-  { month: "May", value: 18000 },
-  { month: "Jun", value: 22000 },
-  { month: "Jul", value: 26000 },
-]
+interface DashboardState {
+  kpiCards: KPICard[]
+  revenueData: Array<{ month: string; value: number }>
+  salesData: Array<{ year: string; value: number }>
+  insights: string
+  recommendations: string[]
+  confidenceFactor: number
+  loading: boolean
+  error: string | null
+}
 
-const salesData = [
-  { year: "2019", value: 400 },
-  { year: "2020", value: 500 },
-  { year: "2021", value: 550 },
-  { year: "2022", value: 620 },
-  { year: "2023", value: 800 },
-  { year: "2024", value: 600 },
-]
-
-const recommendations = [
-  "Maintain high stock of sub-category 'Phones' as growth remains consistent.",
-  "Expand regional analysis to Central regions showing profit ratio improvements.",
-]
+const defaultState: DashboardState = {
+  kpiCards: [],
+  revenueData: [],
+  salesData: [],
+  insights: "Loading dashboard data...",
+  recommendations: [],
+  confidenceFactor: 0,
+  loading: true,
+  error: null,
+}
 
 export default function DashboardPage() {
+  const searchParams = useSearchParams()
+  const datasetId = searchParams.get("dataset_id")
   const [activeTab, setActiveTab] = useState("OVERVIEW")
+  const [dashboardData, setDashboardData] = useState<DashboardState>(defaultState)
+
+  useEffect(() => {
+    const loadDashboardData = async () => {
+      if (!datasetId) {
+        setDashboardData((prev) => ({
+          ...prev,
+          loading: false,
+          error: "No dataset selected. Please select a dataset first.",
+        }))
+        return
+      }
+
+      try {
+        setDashboardData((prev) => ({ ...prev, loading: true, error: null }))
+        const data = await fetchDashboardData(datasetId)
+        setDashboardData({
+          kpiCards: data.kpiCards,
+          revenueData: data.revenueData,
+          salesData: data.salesData,
+          insights: data.insights,
+          recommendations: data.recommendations,
+          confidenceFactor: data.confidenceFactor,
+          loading: false,
+          error: null,
+        })
+      } catch (error) {
+        console.error("[v0] Error loading dashboard:", error)
+        setDashboardData((prev) => ({
+          ...prev,
+          loading: false,
+          error: error instanceof Error ? error.message : "Failed to load dashboard data",
+        }))
+      }
+    }
+
+    loadDashboardData()
+  }, [datasetId])
 
   return (
     <AppLayout>
@@ -114,9 +128,31 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Error State */}
+        {dashboardData.error && (
+          <div className="p-4 rounded-xl bg-red-950/30 border border-red-500/50 mb-6 flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-red-400">Error Loading Dashboard</h3>
+              <p className="text-sm text-red-300/80 mt-1">{dashboardData.error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {dashboardData.loading && (
+          <div className="flex items-center justify-center h-96">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="w-8 h-8 text-primary animate-spin" />
+              <p className="text-muted-foreground">Loading dashboard data...</p>
+            </div>
+          </div>
+        )}
+
         {/* KPI Cards */}
+        {!dashboardData.loading && (
         <div className="grid grid-cols-4 gap-4 mb-6">
-          {kpiCards.map((kpi) => (
+          {dashboardData.kpiCards.map((kpi) => (
             <div key={kpi.label} className="p-4 rounded-xl bg-card border border-border">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-muted-foreground tracking-wider">{kpi.label}</span>
@@ -151,26 +187,30 @@ export default function DashboardPage() {
             </div>
           ))}
         </div>
+        )}
 
         {/* Analyst Narration */}
+        {!dashboardData.loading && (
         <div className="p-4 rounded-xl bg-card border border-border mb-6">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-1 h-4 bg-primary rounded" />
             <span className="text-xs font-semibold tracking-wider">SENIOR ANALYST NARRATION</span>
           </div>
           <p className="text-muted-foreground italic">
-            &quot;Sales peaked in March mainly due to high demand in Karachi. Product A contributed 35% of total revenue.&quot;
+            &quot;{dashboardData.insights}&quot;
           </p>
         </div>
+        )}
 
         {/* Charts Row */}
+        {!dashboardData.loading && (
         <div className="grid grid-cols-3 gap-4 mb-6">
           {/* Revenue Trend */}
           <div className="p-4 rounded-xl bg-card border border-border">
             <h3 className="text-xs font-semibold tracking-wider text-muted-foreground mb-4">REVENUE TREND</h3>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={revenueData}>
+                <LineChart data={dashboardData.revenueData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1a2744" />
                   <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -195,7 +235,7 @@ export default function DashboardPage() {
             <h3 className="text-xs font-semibold tracking-wider text-muted-foreground mb-4">SALES TREND</h3>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={salesData}>
+                <BarChart data={dashboardData.salesData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1a2744" />
                   <XAxis dataKey="year" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -214,7 +254,7 @@ export default function DashboardPage() {
           <div className="p-4 rounded-xl bg-card border border-border">
             <h3 className="text-xs font-semibold tracking-wider text-primary mb-4">RECOMMENDATIONS</h3>
             <ul className="space-y-3">
-              {recommendations.map((rec, idx) => (
+              {dashboardData.recommendations.map((rec, idx) => (
                 <li key={idx} className="flex items-start gap-2">
                   <span className="w-2 h-2 rounded-full bg-primary mt-1.5 flex-shrink-0" />
                   <span className="text-sm text-muted-foreground">{rec}</span>
@@ -224,10 +264,13 @@ export default function DashboardPage() {
 
             <div className="mt-6 p-3 rounded-lg bg-secondary">
               <h4 className="text-xs font-semibold tracking-wider text-primary mb-2">STRATEGIC FORECAST</h4>
-              <p className="text-xs text-muted-foreground">CONFIDENCE FACTOR: 96.4% ACCURACY</p>
+              <p className="text-xs text-muted-foreground">
+                CONFIDENCE FACTOR: {(dashboardData.confidenceFactor * 100).toFixed(1)}% ACCURACY
+              </p>
             </div>
           </div>
         </div>
+        )}
       </div>
     </AppLayout>
   )

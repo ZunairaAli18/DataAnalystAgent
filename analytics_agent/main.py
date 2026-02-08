@@ -921,3 +921,139 @@ async def analyze_all_columns(dataset_id: str):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to analyze columns: {str(e)}")
+
+
+# --- DASHBOARD ENDPOINTS ---
+
+@app.get("/data/{dataset_id}/kpi-summary")
+async def get_kpi_summary(dataset_id: str):
+    """
+    Get KPI summary (Sales, Profit, Orders, Returns) for the dashboard
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        df = pl.read_parquet(
+            s3_path,
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Generate KPI cards from numeric columns
+        kpi_cards = ColumnAnalyzer.generate_kpi_cards(df)
+        
+        return {"kpi_cards": kpi_cards}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get KPI summary: {str(e)}")
+
+
+@app.get("/data/{dataset_id}/revenue-trend")
+async def get_revenue_trend(dataset_id: str):
+    """
+    Get revenue trend data for the dashboard chart
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        df = pl.read_parquet(
+            s3_path,
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Generate revenue trend data
+        revenue_data = ColumnAnalyzer.generate_revenue_trend(df)
+        
+        return {"revenue_data": revenue_data}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get revenue trend: {str(e)}")
+
+
+@app.get("/data/{dataset_id}/sales-trend")
+async def get_sales_trend(dataset_id: str):
+    """
+    Get sales trend data for the dashboard chart
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        df = pl.read_parquet(
+            s3_path,
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Generate sales trend data
+        sales_data = ColumnAnalyzer.generate_sales_trend(df)
+        
+        return {"sales_data": sales_data}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get sales trend: {str(e)}")
+
+
+@app.get("/data/{dataset_id}/insights")
+async def get_insights(dataset_id: str):
+    """
+    Get insights and recommendations for the dashboard
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        df = pl.read_parquet(
+            s3_path,
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Generate insights
+        insights = ColumnAnalyzer.generate_insights(df)
+        recommendations = ColumnAnalyzer.generate_recommendations(df)
+        confidence_factor = ColumnAnalyzer.calculate_confidence(df)
+        
+        return {
+            "insights": insights,
+            "recommendations": recommendations,
+            "confidence_factor": confidence_factor
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get insights: {str(e)}")
+
+
+@app.get("/data/{dataset_id}/dashboard")
+async def get_full_dashboard(dataset_id: str):
+    """
+    Get complete dashboard data including KPIs, charts, insights, and recommendations
+    """
+    try:
+        bucket = SupabaseDataEngine.BUCKET
+        s3_path = f"s3://{bucket}/datasets/{dataset_id}/data.parquet"
+        
+        df = pl.read_parquet(
+            s3_path,
+            storage_options=SupabaseDataEngine.S3_OPTIONS
+        )
+        
+        # Generate all dashboard components
+        kpi_cards = ColumnAnalyzer.generate_kpi_cards(df)
+        revenue_data = ColumnAnalyzer.generate_revenue_trend(df)
+        sales_data = ColumnAnalyzer.generate_sales_trend(df)
+        insights = ColumnAnalyzer.generate_insights(df)
+        recommendations = ColumnAnalyzer.generate_recommendations(df)
+        confidence_factor = ColumnAnalyzer.calculate_confidence(df)
+        
+        return {
+            "dataset_id": dataset_id,
+            "kpi_cards": kpi_cards,
+            "revenue_data": revenue_data,
+            "sales_data": sales_data,
+            "insights": insights,
+            "recommendations": recommendations,
+            "confidence_factor": confidence_factor
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get dashboard data: {str(e)}")
