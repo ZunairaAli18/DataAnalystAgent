@@ -187,7 +187,7 @@ function generateCharts(
     }
   }
 
-  // 2. Bar chart for categorical breakdowns
+  // 2. Bar chart for categorical breakdowns (with numeric metric)
   if (categoricalCols.length > 0 && numericCols.length > 0) {
     const catCol = categoricalCols[0]
     const metricCol = numericCols[0]
@@ -219,6 +219,40 @@ function generateCharts(
       xKey: "name",
       yKey: "value",
       color: chartColors[1],
+    })
+  }
+
+  // 2b. Categorical frequency chart (count-based for categorical-only data)
+  if (categoricalCols.length > 0 && numericCols.length === 0) {
+    const catCol = categoricalCols[0]
+    
+    // Count occurrences
+    const counts: Record<string, number> = {}
+    rows.forEach((row) => {
+      const key = String(row[catCol] ?? "Unknown")
+      counts[key] = (counts[key] || 0) + 1
+    })
+
+    const pieData = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, count]) => ({
+        name,
+        value: count,
+      }))
+
+    const total = pieData.reduce((a, b) => a + b.value, 0)
+    const topItem = pieData[0]
+    const topPct = total > 0 ? ((topItem.value / total) * 100).toFixed(1) : "0"
+
+    charts.push({
+      type: "pie",
+      title: `${catCol.replace(/_/g, " ")} Distribution`,
+      description: `Shows proportional breakdown of ${catCol.replace(/_/g, " ")} across ${pieData.length} categories. "${topItem.name}" holds the largest share at ${topPct}% (${topItem.value.toLocaleString()} records).`,
+      data: pieData,
+      xKey: "name",
+      yKey: "value",
+      color: chartColors[0],
     })
   }
 
@@ -254,6 +288,39 @@ function generateCharts(
       xKey: "name",
       yKey: "value",
       color: chartColors[2],
+    })
+  }
+
+  // 3b. Second categorical frequency chart (for multi-categorical data)
+  if (categoricalCols.length > 1 && numericCols.length === 0) {
+    const catCol = categoricalCols[1]
+    
+    const counts: Record<string, number> = {}
+    rows.forEach((row) => {
+      const key = String(row[catCol] ?? "Unknown")
+      counts[key] = (counts[key] || 0) + 1
+    })
+
+    const barData = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, count]) => ({
+        name,
+        value: count,
+      }))
+
+    const total = barData.reduce((a, b) => a + b.value, 0)
+    const topItem = barData[0]
+    const topPct = total > 0 ? ((topItem.value / total) * 100).toFixed(1) : "0"
+
+    charts.push({
+      type: "bar",
+      title: `${catCol.replace(/_/g, " ")} Frequency`,
+      description: `Shows frequency distribution of ${catCol.replace(/_/g, " ")} across ${barData.length} categories. "${topItem.name}" appears most frequently at ${topPct}% (${topItem.value.toLocaleString()} occurrences).`,
+      data: barData,
+      xKey: "name",
+      yKey: "value",
+      color: chartColors[1],
     })
   }
 
