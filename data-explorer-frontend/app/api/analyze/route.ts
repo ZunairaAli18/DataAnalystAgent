@@ -79,13 +79,22 @@ function detectCategoricalColumns(
   rows: CleanedRow[],
   numericCols: string[]
 ): string[] {
-  return columns
+  const result = columns
     .filter((col) => {
       if (numericCols.includes(col.key)) return false
       const uniqueValues = new Set(rows.map((r) => String(r[col.key] ?? "")))
-      return uniqueValues.size > 1 && uniqueValues.size <= 50
+      // Loosen the constraint to allow more columns to be included as categorical
+      // Allow columns with more than 50 unique values for richer categorization
+      const passes = uniqueValues.size > 1 // Changed from uniqueValues.size <= 50 to include all multi-valued columns
+      if (!passes) {
+        console.log(`[v0] Column "${col.key}" filtered out - unique values: ${uniqueValues.size}`)
+      }
+      return passes
     })
     .map((col) => col.key)
+  
+  console.log("[v0] Detected categorical columns:", result)
+  return result
 }
 
 function detectDateColumns(columns: ColumnMeta[], rows: CleanedRow[]): string[] {
@@ -171,6 +180,13 @@ function generateCharts(
 ): ChartData[] {
   const charts: ChartData[] = []
   const chartColors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff", "#00e676"]
+
+  console.log("[v0] generateCharts called with:", {
+    numericCols,
+    categoricalCols,
+    dateCols,
+    rowsLength: rows.length,
+  })
 
   // 1. Time-series line chart if date column exists
   if (dateCols.length > 0 && numericCols.length > 0) {
@@ -580,15 +596,69 @@ export async function POST(request: NextRequest) {
 
     // Fill empty values using forward fill
     rows = fillEmptyValues(rows, columns)
+    
+    console.log("[v0] Data after filling empty values - First 3 rows:", rows.slice(0, 3))
 
     // Detect column types
     const numericCols = detectNumericColumns(columns, rows)
     const categoricalCols = detectCategoricalColumns(columns, rows, numericCols)
     const dateCols = detectDateColumns(columns, rows)
 
+    console.log("[v0] Column detection results:", {
+      numericCols,
+      categoricalCols,
+      dateCols,
+      totalRows: rows.length,
+      totalColumns: columns.length,
+    })
+
     // Generate analysis components
-    const kpis = computeKPIs(numericCols, rows)
     const charts = generateCharts(numericCols, categoricalCols, dateCols, rows)
+    console.log("[v0] Generated charts:", {
+      chartsCount: charts.length,
+      chartTypes: charts.map((c) => c.type),
+    })
+
+    // Fallback: If no charts generated, create charts from any available columns
+    if (charts.length === 0) {
+      console.log("[v0] No charts generated - creating fallback charts")
+      
+      // Try to create a chart from the first few non-numeric columns
+      for (const col of columns.slice(0, 3)) {
+        if (numericCols.includes(col.key)) continue
+        
+        const counts: Record<string, number> = {}
+        rows.forEach((row) => {
+          const key = String(row[col.key] ?? "Unknown")
+          if (key && key !== "") {
+            counts[key] = (counts[key] || 0) + 1
+          }
+        })
+        
+        const fallbackData = Object.entries(counts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 15)
+          .map(([name, count]) => ({
+            name,
+            value: count,
+          }))
+        
+        if (fallbackData.length > 0) {
+          console.log(`[v0] Creating fallback chart for column "${col.key}" with ${fallbackData.length} categories`)
+          charts.push({
+            type: charts.length === 0 ? "pie" : "bar",
+            title: `${col.key.replace(/_/g, " ")} Distribution`,
+            description: `Distribution of ${col.key.replace(/_/g, " ")} across all records.`,
+            data: fallbackData,
+            xKey: "name",
+            yKey: "value",
+            color: ["#00d4ff", "#ff3d71", "#ffaa00"][charts.length % 3],
+          })
+          
+          if (charts.length >= 2) break
+        }
+      }
+    }
     const description = generateDescription(numericCols, categoricalCols, dateCols, rows)
     const trends = generateTrends(numericCols, categoricalCols, dateCols, rows)
     const recommendations = generateRecommendations(numericCols, categoricalCols, dateCols, rows)
