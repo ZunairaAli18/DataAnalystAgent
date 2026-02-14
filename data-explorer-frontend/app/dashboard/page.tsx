@@ -766,18 +766,38 @@ export default function DashboardPage() {
     }
   }, [datasetId])
 
-  const handleExportPDF = useCallback(async () => {
-    setIsExporting(true)
-    try {
-      const timestamp = new Date().toISOString().split("T")[0]
-      await exportDashboardToPDF("dashboard-content", `data-analysis-report-${timestamp}.pdf`)
-    } catch (error) {
-      console.error("Failed to export PDF:", error)
-      alert("Failed to export PDF. Please try again.")
-    } finally {
-      setIsExporting(false)
+const handleExportPDF = useCallback(async () => {
+  if (analysis.status !== "success") return
+  setIsExporting(true)
+  try {
+    const response = await fetch("/api/export-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(analysis.data),
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => null)
+      throw new Error(err?.error || "Export failed")
     }
-  }, [])
+
+    // Trigger browser download
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `data-analysis-report-${new Date().toISOString().split("T")[0]}.pdf`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error("Failed to export PDF:", error)
+    alert(`Failed to export PDF: ${error instanceof Error ? error.message : "Unknown error"}`)
+  } finally {
+    setIsExporting(false)
+  }
+}, [analysis])
 
   useEffect(() => {
     runAnalysis()
