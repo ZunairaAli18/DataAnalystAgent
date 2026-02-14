@@ -1012,13 +1012,31 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                 "color": colors[(i + 1) % len(colors)],
             })
 
-        # Add categorical unique count KPI if room
-        if len(kpis) < 4 and categorical_cols:
-            cat_col = categorical_cols[0]
-            unique_count = df[cat_col].n_unique()
+        # All chartable columns: categorical + boolean + text with sensible cardinality
+        all_chartable = [
+            p for p in column_profiles
+            if p["dtype"] in ("categorical", "boolean")
+            or (p["dtype"] == "text" and 2 <= p["distinct_count"] <= 50)
+        ]
+
+        # Fill remaining KPI slots with unique counts from chartable columns
+        for profile in all_chartable:
+            if len(kpis) >= 4:
+                break
+            if profile["key"] in numeric_cols:
+                continue
             kpis.append({
-                "label": f"UNIQUE {cat_col.upper().replace('_', ' ')}",
-                "value": f"{unique_count:,}",
+                "label": f"UNIQUE {profile['key'].upper().replace('_', ' ')}",
+                "value": f"{profile['distinct_count']:,}",
+                "change": None,
+                "positive": True,
+                "color": colors[len(kpis) % len(colors)],
+            })
+
+        if len(kpis) < 4:
+            kpis.append({
+                "label": "TOTAL COLUMNS",
+                "value": f"{len(col_keys):,}",
                 "change": None,
                 "positive": True,
                 "color": colors[len(kpis) % len(colors)],
@@ -1055,10 +1073,13 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     "color": chart_colors[0],
                 })
 
-        # Categorical bar/pie charts (up to 3)
-        cat_limit = min(len(categorical_cols), 3)
+        # Categorical/chartable columns -- generate up to 5 charts when no numeric, 3 otherwise
+        chartable_keys = [p["key"] for p in all_chartable]
+        cat_limit = min(len(chartable_keys), 5 if not numeric_cols else 3)
         for ci in range(cat_limit):
-            cat_col = categorical_cols[ci]
+            cat_col = chartable_keys[ci]
+            profile = next((p for p in column_profiles if p["key"] == cat_col), None)
+            distinct_count = profile["distinct_count"] if profile else 999
             metric_col = numeric_cols[ci % len(numeric_cols)] if numeric_cols else None
 
             if metric_col:
@@ -1071,9 +1092,7 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                 top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
                 top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
 
-                # Pick pie for low cardinality on non-first charts
-                profile = next((p for p in column_profiles if p["key"] == cat_col), None)
-                use_type = "pie" if profile and profile["distinct_count"] <= 8 and ci > 0 else "bar"
+                use_type = "pie" if distinct_count <= 8 and ci > 0 else "bar"
 
                 charts.append({
                     "type": use_type,
@@ -1085,17 +1104,23 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     "color": chart_colors[(ci + 1) % len(chart_colors)],
                 })
             else:
-                # Count-based bar chart when no numeric columns
+                # Count-based chart
                 counts = {}
                 for row in rows:
                     key = str(row.get(cat_col, "Unknown"))
                     counts[key] = counts.get(key, 0) + 1
                 bar_data = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
+                if not bar_data:
+                    continue
                 bar_total = sum(v for _, v in bar_data)
-                top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
+                top_name, top_val = bar_data[0]
                 top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
+
+                # Use pie for low cardinality
+                use_type = "pie" if distinct_count <= 8 else "bar"
+
                 charts.append({
-                    "type": "bar",
+                    "type": use_type,
                     "title": f"{cat_col.replace('_', ' ')} Distribution",
                     "description": f"Shows frequency of {cat_col.replace('_', ' ')} values. \"{top_name}\" is the most common with {top_val:,} records ({top_pct:.1f}%). Total shown: {bar_total:,}.",
                     "data": [{"name": k, "value": v} for k, v in bar_data],
@@ -1104,8 +1129,11 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     "color": chart_colors[(ci + 1) % len(chart_colors)],
                 })
 
-        # Boolean pie charts
+        # Boolean pie charts (if not already charted)
+        already_charted = set(chartable_keys[:cat_limit])
         for bi, bool_col in enumerate(boolean_cols[:1]):
+            if bool_col in already_charted:
+                continue
             counts = {}
             for row in rows:
                 key = str(row.get(bool_col, "Unknown")).lower()
@@ -1148,6 +1176,30 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     "color": chart_colors[4 % len(chart_colors)],
                 })
 
+        # Cross-tabulation chart for no-numeric datasets
+        if not numeric_cols and len(chartable_keys) >= 2:
+            col1, col2 = chartable_keys[0], chartable_keys[1]
+            cross = {}
+            for row in rows:
+                k1 = str(row.get(col1, "Unknown"))
+                k2 = str(row.get(col2, "Unknown"))
+                combo = f"{k1} / {k2}"
+                cross[combo] = cross.get(combo, 0) + 1
+            top_combos = sorted(cross.items(), key=lambda x: x[1], reverse=True)[:12]
+            if len(top_combos) > 1:
+                combo_total = sum(v for _, v in top_combos)
+                top_combo_name, top_combo_val = top_combos[0]
+                top_combo_pct = (top_combo_val / combo_total * 100) if combo_total > 0 else 0
+                charts.append({
+                    "type": "bar",
+                    "title": f"{col1.replace('_', ' ')} vs {col2.replace('_', ' ')}",
+                    "description": f"Cross-tabulation of {col1.replace('_', ' ')} and {col2.replace('_', ' ')}. Top combination \"{top_combo_name}\" appears {top_combo_val} times ({top_combo_pct:.1f}% of shown).",
+                    "data": [{"name": k, "value": v} for k, v in top_combos],
+                    "xKey": "name",
+                    "yKey": "value",
+                    "color": chart_colors[3 % len(chart_colors)],
+                })
+
         # ── Description ──
         desc_parts = [f"This dataset contains {len(df):,} records across {len(col_keys)} columns."]
         if numeric_cols:
@@ -1158,11 +1210,14 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     f'The primary metric "{col.replace("_", " ")}" ranges from {values.min():,.2f} to {values.max():,.2f}, '
                     f'with an average of {values.mean():,.2f} and a total of {values.sum():,.2f}.'
                 )
-        if categorical_cols:
-            col = categorical_cols[0]
-            desc_parts.append(f'The "{col.replace("_", " ")}" dimension has {df[col].n_unique()} unique values.')
+        if all_chartable:
+            descs = [f'"{p["key"].replace("_", " ")}" ({p["distinct_count"]} unique)' for p in all_chartable[:3]]
+            desc_parts.append(f'Key dimensions: {", ".join(descs)}.')
         if boolean_cols:
             desc_parts.append(f'{len(boolean_cols)} boolean column(s) detected: {", ".join(c.replace("_", " ") for c in boolean_cols)}.')
+        text_cols = [p for p in column_profiles if p["dtype"] == "text" and p["distinct_count"] > 50]
+        if text_cols and not numeric_cols:
+            desc_parts.append(f'This is a text-heavy dataset with {len(text_cols)} free-form text column(s).')
         description = " ".join(desc_parts)
 
         # ── Trends ──
@@ -1191,16 +1246,15 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             pct = (above / len(values)) * 100 if values else 0
             trends.append(f"{pct:.1f}% of records have {col.replace('_', ' ')} above the average value.")
 
-        if categorical_cols:
-            col = categorical_cols[0]
-            counts = {}
-            for row in rows:
-                key = str(row.get(col, "Unknown"))
-                counts[key] = counts.get(key, 0) + 1
-            sorted_c = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-            top3 = sum(v for _, v in sorted_c[:3])
-            top3_pct = (top3 / len(rows)) * 100 if rows else 0
-            trends.append(f'Top 3 categories in "{col.replace("_", " ")}" account for {top3_pct:.1f}% of all records.')
+        # Per-chartable-column frequency trends
+        for profile in all_chartable[:3]:
+            if len(trends) >= 5:
+                break
+            top_val = profile["top_values"][0] if profile["top_values"] else None
+            if top_val:
+                trends.append(
+                    f'"{top_val["value"]}" is the most frequent {profile["key"].replace("_", " ")} value at {top_val["percentage"]}% of records ({top_val["count"]:,} out of {len(rows):,}).'
+                )
 
         # High null rate trend
         high_null = [p for p in column_profiles if p["null_count"] / p["total_count"] > 0.1]
@@ -1208,6 +1262,11 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             worst = max(high_null, key=lambda p: p["null_count"])
             null_pct = (worst["null_count"] / worst["total_count"]) * 100
             trends.append(f'"{worst["key"].replace("_", " ")}" has the highest null rate at {null_pct:.1f}%.')
+
+        if not numeric_cols and len(trends) < 5:
+            text_heavy = [p for p in column_profiles if p["dtype"] == "text" and p["distinct_count"] > 50]
+            if text_heavy:
+                trends.append(f'{len(text_heavy)} column(s) contain mostly unique text (e.g., "{text_heavy[0]["key"].replace("_", " ")}"), suggesting free-form entries.')
 
         # ── Recommendations ──
         recommendations = []
@@ -1227,14 +1286,33 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                 recommendations.append(
                     f'Investigate underperforming categories like "{sorted_items[-1][0]}" for growth opportunities.'
                 )
+
+        if not numeric_cols and all_chartable:
+            top_cat = all_chartable[0]
+            top_val = top_cat["top_values"][0] if top_cat["top_values"] else None
+            if top_val:
+                recommendations.append(
+                    f'The "{top_cat["key"].replace("_", " ")}" column is dominated by "{top_val["value"]}" ({top_val["percentage"]}%) -- consider whether this concentration is expected.'
+                )
+            recommendations.append(
+                "This dataset is primarily text/categorical. Consider augmenting with numeric metrics for richer quantitative analysis."
+            )
+
         if date_cols:
             recommendations.append(
                 f'Consider deeper time-series analysis on "{date_cols[0].replace("_", " ")}" to identify seasonal patterns.'
             )
-        if len(categorical_cols) >= 2:
+        if len(all_chartable) >= 2:
             recommendations.append(
-                f'Cross-tabulate "{categorical_cols[0].replace("_", " ")}" and "{categorical_cols[1].replace("_", " ")}" to discover interaction patterns.'
+                f'Cross-tabulate "{all_chartable[0]["key"].replace("_", " ")}" and "{all_chartable[1]["key"].replace("_", " ")}" to discover interaction patterns.'
             )
+
+        high_null_recs = [p for p in column_profiles if p["null_count"] / p["total_count"] > 0.2]
+        if high_null_recs:
+            recommendations.append(
+                f'{len(high_null_recs)} column(s) have >20% null values -- consider data quality improvements for "{high_null_recs[0]["key"].replace("_", " ")}".'
+            )
+
         recommendations.append("Export this analysis and share with stakeholders for data-driven decision making.")
 
         return {

@@ -243,9 +243,14 @@ function ChartCard({
   const [showFilters, setShowFilters] = useState(false)
 
   const xOptions = useMemo(() => {
-    const all = [...new Set([...categoricalCols, ...dateCols, ...numericCols, ...boolCols])]
-    return all
-  }, [categoricalCols, dateCols, numericCols, boolCols])
+    // Include all recognized columns plus any column from initialChart that might be text-based
+    const base = [...new Set([...categoricalCols, ...dateCols, ...numericCols, ...boolCols])]
+    // Also include the initial chart's xKey if not already present
+    if (initialChart.xKey && !base.includes(initialChart.xKey) && initialChart.xKey !== "name" && initialChart.xKey !== "range") {
+      base.push(initialChart.xKey)
+    }
+    return base
+  }, [categoricalCols, dateCols, numericCols, boolCols, initialChart.xKey])
 
   const yOptions = useMemo(() => {
     // For count chart type, no Y needed
