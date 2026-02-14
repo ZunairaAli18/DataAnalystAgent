@@ -34,6 +34,31 @@ interface ChartData {
   color: string
 }
 
+function fillEmptyValues(rows: CleanedRow[], columns: ColumnMeta[]): CleanedRow[] {
+  // Forward fill for each column
+  return rows.map((row, idx) => {
+    const filledRow: CleanedRow = { ...row }
+    columns.forEach((col) => {
+      const currentVal = filledRow[col.key]
+      // If current value is empty, look back for last non-empty value
+      if (currentVal === null || currentVal === undefined || currentVal === "") {
+        for (let i = idx - 1; i >= 0; i--) {
+          const prevVal = rows[i][col.key]
+          if (prevVal !== null && prevVal !== undefined && prevVal !== "") {
+            filledRow[col.key] = prevVal
+            break
+          }
+        }
+        // If still empty (no previous value found), use "N/A" for categorical, "0" for numeric
+        if (filledRow[col.key] === null || filledRow[col.key] === undefined || filledRow[col.key] === "") {
+          filledRow[col.key] = col.dtype && (col.dtype.includes("Int") || col.dtype.includes("Float")) ? 0 : "N/A"
+        }
+      }
+    })
+    return filledRow
+  })
+}
+
 function detectNumericColumns(columns: ColumnMeta[], rows: CleanedRow[]): string[] {
   return columns
     .filter((col) => {
@@ -544,7 +569,7 @@ function generateRecommendations(
 export async function POST(request: NextRequest) {
   try {
     const body: AnalysisRequest = await request.json()
-    const { columns, rows } = body
+    let { columns, rows } = body
 
     if (!columns || !rows || rows.length === 0) {
       return NextResponse.json(
@@ -552,6 +577,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    // Fill empty values using forward fill
+    rows = fillEmptyValues(rows, columns)
 
     // Detect column types
     const numericCols = detectNumericColumns(columns, rows)
