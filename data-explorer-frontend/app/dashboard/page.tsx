@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { exportDashboardToPDF } from "@/lib/export-pdf"
 import { cn } from "@/lib/utils"
+import { analyzeCleanedData, formatAnalysisRequest } from "@/lib/analyze-data"
 import {
   LineChart,
   Line,
@@ -559,22 +560,12 @@ export default function DashboardPage() {
     setAnalysis({ status: "loading" })
 
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          columns,
-          rows: parsed.cleaned_data,
-          dataset_id: datasetId || "unknown",
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null)
-        throw new Error(errorData?.error || `Analysis failed: ${response.statusText}`)
-      }
-
-      const result: AnalysisResult = await response.json()
+      // Format the request for Python backend
+      const analysisRequest = formatAnalysisRequest(parsed, datasetId || "unknown")
+      
+      // Call Python backend directly (configure backend URL as needed)
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"
+      const result: AnalysisResult = await analyzeCleanedData(analysisRequest, backendUrl)
       setAnalysis({ status: "success", data: result })
     } catch (error) {
       setAnalysis({
