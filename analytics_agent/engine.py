@@ -272,10 +272,17 @@ class SupabaseDataEngine:
         # Apply cleaning based on selected factors
         if "missing_values" in factors:
             for col in df.columns:
-                if df[col].null_count() == 0:
-                    continue
-
                 dtype = df[col].dtype
+                
+                # Check for both null and empty string values
+                null_count = df[col].null_count()
+                empty_string_count = 0
+                if dtype == pl.Utf8:
+                    empty_string_count = (df[col].str.strip_chars().eq("")).sum()
+                
+                total_missing = null_count + empty_string_count
+                if total_missing == 0:
+                    continue
 
                 # Numeric → median
                 if dtype in (
@@ -289,17 +296,27 @@ class SupabaseDataEngine:
                             pl.col(col).fill_null(median_val)
                         )
 
-                # Categorical → mode
+                # Categorical/String → mode
                 else:
+                    # First convert empty strings to null so mode() ignores them
+                    if dtype == pl.Utf8:
+                        df = df.with_columns(
+                            pl.when(pl.col(col).str.strip_chars().eq(""))
+                            .then(None)
+                            .otherwise(pl.col(col))
+                            .alias(col)
+                        )
+                    
+                    # Get mode
                     mode_df = df.select(pl.col(col).mode())
                     if mode_df.height > 0:
                         mode_val = mode_df.item(0, 0)
                         if mode_val is not None:
-                        # Convert mode_val to match column type
-                           if dtype in (pl.Categorical, pl.Utf8):
-                              mode_val = str(mode_val)
-                           df = df.with_columns(
-                            pl.col(col).fill_null(mode_val)
+                            # Convert mode_val to match column type
+                            if dtype in (pl.Categorical, pl.Utf8):
+                                mode_val = str(mode_val)
+                            df = df.with_columns(
+                                pl.col(col).fill_null(mode_val)
                             )
 
             cleaning_summary.append(
