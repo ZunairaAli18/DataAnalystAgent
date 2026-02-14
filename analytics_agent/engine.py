@@ -272,10 +272,26 @@ class SupabaseDataEngine:
         # Apply cleaning based on selected factors
         if "missing_values" in factors:
             for col in df.columns:
-                if df[col].null_count() == 0:
+                dtype = df[col].dtype
+                
+                # Check for both null and empty string values
+                null_count = df[col].null_count()
+                empty_string_count = 0
+                if dtype == pl.Utf8:
+                    empty_string_count = (df[col].str.strip_chars().eq("")).sum()
+                
+                total_missing = null_count + empty_string_count
+                if total_missing == 0:
                     continue
 
-                dtype = df[col].dtype
+                # Convert empty strings to null first
+                if dtype == pl.Utf8:
+                    df = df.with_columns(
+                        pl.when(pl.col(col).str.strip_chars().eq(""))
+                        .then(None)
+                        .otherwise(pl.col(col))
+                        .alias(col)
+                    )
 
                 # Numeric → median
                 if dtype in (
@@ -283,27 +299,46 @@ class SupabaseDataEngine:
                     pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
                     pl.Float32, pl.Float64
                 ):
+                    # First try forward fill
+                    df = df.with_columns(
+                        pl.col(col).forward_fill()
+                    )
+                    # Then fill remaining nulls with median
                     median_val = df[col].median()
                     if median_val is not None:
                         df = df.with_columns(
                             pl.col(col).fill_null(median_val)
                         )
 
-                # Categorical → mode
+                # Categorical/String → forward fill then mode
                 else:
-                    mode_df = df.select(pl.col(col).mode())
-                    if mode_df.height > 0:
-                        mode_val = mode_df.item(0, 0)
-                        if mode_val is not None:
-                        # Convert mode_val to match column type
-                           if dtype in (pl.Categorical, pl.Utf8):
-                              mode_val = str(mode_val)
-                           df = df.with_columns(
-                            pl.col(col).fill_null(mode_val)
-                            )
+                    # First apply forward fill to carry forward last non-null value
+                    df = df.with_columns(
+                        pl.col(col).forward_fill()
+                    )
+                    
+                    # Then fill remaining nulls (at the beginning) with mode
+                    remaining_nulls = df[col].null_count()
+                    if remaining_nulls > 0:
+                        mode_df = df.select(pl.col(col).mode())
+                        if mode_df.height > 0:
+                            mode_val = mode_df.item(0, 0)
+                            if mode_val is not None:
+                                # Convert mode_val to match column type
+                                if dtype in (pl.Categorical, pl.Utf8):
+                                    mode_val = str(mode_val)
+                                df = df.with_columns(
+                                    pl.col(col).fill_null(mode_val)
+                                )
+                    
+                    # If still nulls, use "Unknown" as fallback
+                    if df[col].null_count() > 0:
+                        df = df.with_columns(
+                            pl.col(col).fill_null("Unknown")
+                        )
 
             cleaning_summary.append(
-                "Filled missing values (numeric → median, categorical → mode)"
+                "Filled missing values (forward fill → median/mode → fallback)"
             )
         
         if "duplicate_rows" in factors:
