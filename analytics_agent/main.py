@@ -864,8 +864,8 @@ async def auto_generate_dashboards(
 @app.post("/data/analyze")
 async def analyze_cleaned_data(request: AnalyzeRequest):
     """
-    Analyze cleaned data and return KPIs, charts, description, trends, and recommendations.
-    Accepts the cleaned data payload from the frontend.
+    Analyze cleaned data and return KPIs, charts, description, trends, recommendations,
+    and full column profiles with distinct values and suggested chart types.
     """
     try:
         columns = request.columns
@@ -877,23 +877,112 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
         df = pl.DataFrame(rows)
         col_keys = [c["key"] for c in columns]
 
-        # Detect column types
+        # ── Detect column types ──
         numeric_cols = [c for c in col_keys if df[c].dtype in (
             pl.Int8, pl.Int16, pl.Int32, pl.Int64,
             pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
             pl.Float32, pl.Float64
         )]
 
+        # Boolean detection
+        bool_values = {"true", "false", "yes", "no", "1", "0", "y", "n"}
+        boolean_cols = []
+        for c in col_keys:
+            if c in numeric_cols:
+                continue
+            unique_vals = set(str(v).lower().strip() for v in df[c].drop_nulls().to_list() if v is not None and str(v).strip())
+            if 0 < len(unique_vals) <= 3 and unique_vals.issubset(bool_values):
+                boolean_cols.append(c)
+
         date_keywords = ["date", "time", "timestamp", "created", "updated", "year", "month"]
         date_cols = [c for c in col_keys if any(kw in c.lower() for kw in date_keywords)]
 
         categorical_cols = [
             c for c in col_keys
-            if c not in numeric_cols and c not in date_cols
-            and 1 < df[c].n_unique() <= 50
+            if c not in numeric_cols and c not in date_cols and c not in boolean_cols
+            and 1 < df[c].n_unique() <= 100
         ]
 
-        # KPIs
+        # ── Build Column Profiles ──
+        column_profiles = []
+        for c in col_keys:
+            series = df[c]
+            non_null = series.drop_nulls()
+            null_count = series.null_count()
+
+            # Determine dtype category
+            if c in numeric_cols:
+                dtype_cat = "numeric"
+            elif c in date_cols:
+                dtype_cat = "date"
+            elif c in boolean_cols:
+                dtype_cat = "boolean"
+            elif c in categorical_cols:
+                dtype_cat = "categorical"
+            else:
+                dtype_cat = "text"
+
+            # Value counts
+            value_counts = {}
+            for val in non_null.to_list():
+                key = str(val)
+                value_counts[key] = value_counts.get(key, 0) + 1
+
+            distinct_count = len(value_counts)
+            sorted_values = sorted(value_counts.items(), key=lambda x: x[1], reverse=True)
+
+            top_values = [
+                {"value": v, "count": cnt, "percentage": round(cnt / len(df) * 100, 2)}
+                for v, cnt in sorted_values[:20]
+            ]
+            distinct_values = [v for v, _ in sorted_values[:200]]
+
+            # Stats for numeric
+            stats = None
+            if dtype_cat == "numeric" and len(non_null) > 0:
+                sorted_nums = sorted(non_null.to_list())
+                n = len(sorted_nums)
+                median = sorted_nums[n // 2] if n % 2 == 1 else (sorted_nums[n // 2 - 1] + sorted_nums[n // 2]) / 2
+                stats = {
+                    "min": float(non_null.min()),
+                    "max": float(non_null.max()),
+                    "mean": float(non_null.mean()),
+                    "median": float(median),
+                    "sum": float(non_null.sum()),
+                }
+
+            # Suggest chart types
+            suggested = []
+            if dtype_cat == "numeric":
+                suggested = ["bar", "line", "heatmap", "column"]
+                if distinct_count <= 15:
+                    suggested.extend(["pie", "donut"])
+            elif dtype_cat == "categorical":
+                if distinct_count <= 8:
+                    suggested = ["pie", "donut", "bar", "column", "funnel"]
+                else:
+                    suggested = ["bar", "column"]
+            elif dtype_cat == "date":
+                suggested = ["line", "bar"]
+            elif dtype_cat == "boolean":
+                suggested = ["pie", "donut", "bar"]
+            else:
+                suggested = ["bar", "column"] if distinct_count <= 20 else ["bar"]
+
+            column_profiles.append({
+                "key": c,
+                "label": c.upper().replace("_", " "),
+                "dtype": dtype_cat,
+                "distinct_count": distinct_count,
+                "null_count": int(null_count),
+                "total_count": len(df),
+                "distinct_values": distinct_values,
+                "top_values": top_values,
+                "stats": stats,
+                "suggested_chart_types": list(dict.fromkeys(suggested)),
+            })
+
+        # ── KPIs ──
         kpis = []
         kpis.append({
             "label": "TOTAL RECORDS",
@@ -903,19 +992,18 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             "color": "#00d4ff",
         })
 
+        colors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff"]
         for i, col in enumerate(numeric_cols[:3]):
             values = df[col].drop_nulls()
             if len(values) == 0:
                 continue
             total = values.sum()
-            avg = values.mean()
             if total > 1_000_000:
                 display = f"{total / 1_000_000:.2f}M"
             elif total > 1_000:
                 display = f"{total / 1_000:.2f}K"
             else:
                 display = f"{total:.2f}"
-            colors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff"]
             kpis.append({
                 "label": col.upper().replace("_", " "),
                 "value": display,
@@ -924,9 +1012,21 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                 "color": colors[(i + 1) % len(colors)],
             })
 
-        # Charts
+        # Add categorical unique count KPI if room
+        if len(kpis) < 4 and categorical_cols:
+            cat_col = categorical_cols[0]
+            unique_count = df[cat_col].n_unique()
+            kpis.append({
+                "label": f"UNIQUE {cat_col.upper().replace('_', ' ')}",
+                "value": f"{unique_count:,}",
+                "change": None,
+                "positive": True,
+                "color": colors[len(kpis) % len(colors)],
+            })
+
+        # ── Charts ──
         charts = []
-        chart_colors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff"]
+        chart_colors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff", "#00e676"]
 
         # Time-series
         if date_cols and numeric_cols:
@@ -955,30 +1055,73 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     "color": chart_colors[0],
                 })
 
-        # Categorical bar charts
-        for ci, cat_col in enumerate(categorical_cols[:2]):
+        # Categorical bar/pie charts (up to 3)
+        cat_limit = min(len(categorical_cols), 3)
+        for ci in range(cat_limit):
+            cat_col = categorical_cols[ci]
             metric_col = numeric_cols[ci % len(numeric_cols)] if numeric_cols else None
-            if not metric_col:
-                break
-            grouped = {}
+
+            if metric_col:
+                grouped = {}
+                for row in rows:
+                    key = str(row.get(cat_col, "Unknown"))
+                    grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
+                bar_data = sorted(grouped.items(), key=lambda x: x[1], reverse=True)[:10]
+                bar_total = sum(v for _, v in bar_data)
+                top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
+                top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
+
+                # Pick pie for low cardinality on non-first charts
+                profile = next((p for p in column_profiles if p["key"] == cat_col), None)
+                use_type = "pie" if profile and profile["distinct_count"] <= 8 and ci > 0 else "bar"
+
+                charts.append({
+                    "type": use_type,
+                    "title": f"{metric_col.replace('_', ' ')} by {cat_col.replace('_', ' ')}",
+                    "description": f"Compares {metric_col.replace('_', ' ')} across {len(bar_data)} {cat_col.replace('_', ' ')} categories. \"{top_name}\" leads with {top_val:,.2f} ({top_pct:.1f}% of shown total). Combined total: {bar_total:,.2f}.",
+                    "data": [{"name": k, "value": round(v, 2)} for k, v in bar_data],
+                    "xKey": "name",
+                    "yKey": "value",
+                    "color": chart_colors[(ci + 1) % len(chart_colors)],
+                })
+            else:
+                # Count-based bar chart when no numeric columns
+                counts = {}
+                for row in rows:
+                    key = str(row.get(cat_col, "Unknown"))
+                    counts[key] = counts.get(key, 0) + 1
+                bar_data = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
+                bar_total = sum(v for _, v in bar_data)
+                top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
+                top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
+                charts.append({
+                    "type": "bar",
+                    "title": f"{cat_col.replace('_', ' ')} Distribution",
+                    "description": f"Shows frequency of {cat_col.replace('_', ' ')} values. \"{top_name}\" is the most common with {top_val:,} records ({top_pct:.1f}%). Total shown: {bar_total:,}.",
+                    "data": [{"name": k, "value": v} for k, v in bar_data],
+                    "xKey": "name",
+                    "yKey": "value",
+                    "color": chart_colors[(ci + 1) % len(chart_colors)],
+                })
+
+        # Boolean pie charts
+        for bi, bool_col in enumerate(boolean_cols[:1]):
+            counts = {}
             for row in rows:
-                key = str(row.get(cat_col, "Unknown"))
-                grouped[key] = grouped.get(key, 0) + (float(row.get(metric_col, 0) or 0))
-            bar_data = sorted(grouped.items(), key=lambda x: x[1], reverse=True)[:10]
-            bar_total = sum(v for _, v in bar_data)
-            top_name, top_val = bar_data[0] if bar_data else ("N/A", 0)
-            top_pct = (top_val / bar_total * 100) if bar_total > 0 else 0
+                key = str(row.get(bool_col, "Unknown")).lower()
+                counts[key] = counts.get(key, 0) + 1
+            pie_data = sorted(counts.items(), key=lambda x: x[1], reverse=True)
             charts.append({
-                "type": "bar",
-                "title": f"{metric_col.replace('_', ' ')} by {cat_col.replace('_', ' ')}",
-                "description": f"Compares {metric_col.replace('_', ' ')} across {len(bar_data)} {cat_col.replace('_', ' ')} categories. \"{top_name}\" leads with {top_val:,.2f} ({top_pct:.1f}% of shown total). Combined total: {bar_total:,.2f}.",
-                "data": [{"name": k, "value": round(v, 2)} for k, v in bar_data],
+                "type": "pie",
+                "title": f"{bool_col.replace('_', ' ')} Breakdown",
+                "description": f"Shows the distribution of {bool_col.replace('_', ' ')} values across {len(df):,} records.",
+                "data": [{"name": k, "value": v} for k, v in pie_data],
                 "xKey": "name",
                 "yKey": "value",
-                "color": chart_colors[(ci + 1) % len(chart_colors)],
+                "color": chart_colors[(cat_limit + bi + 1) % len(chart_colors)],
             })
 
-        # Distribution
+        # Distribution histogram
         if numeric_cols:
             col = numeric_cols[0]
             values = [float(r.get(col, 0) or 0) for r in rows if r.get(col) is not None]
@@ -1002,10 +1145,10 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     "data": dist_data,
                     "xKey": "range",
                     "yKey": "count",
-                    "color": chart_colors[3],
+                    "color": chart_colors[4 % len(chart_colors)],
                 })
 
-        # Description
+        # ── Description ──
         desc_parts = [f"This dataset contains {len(df):,} records across {len(col_keys)} columns."]
         if numeric_cols:
             col = numeric_cols[0]
@@ -1015,9 +1158,14 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
                     f'The primary metric "{col.replace("_", " ")}" ranges from {values.min():,.2f} to {values.max():,.2f}, '
                     f'with an average of {values.mean():,.2f} and a total of {values.sum():,.2f}.'
                 )
+        if categorical_cols:
+            col = categorical_cols[0]
+            desc_parts.append(f'The "{col.replace("_", " ")}" dimension has {df[col].n_unique()} unique values.')
+        if boolean_cols:
+            desc_parts.append(f'{len(boolean_cols)} boolean column(s) detected: {", ".join(c.replace("_", " ") for c in boolean_cols)}.')
         description = " ".join(desc_parts)
 
-        # Trends
+        # ── Trends ──
         trends = []
         if categorical_cols and numeric_cols:
             cat_col = categorical_cols[0]
@@ -1043,7 +1191,25 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             pct = (above / len(values)) * 100 if values else 0
             trends.append(f"{pct:.1f}% of records have {col.replace('_', ' ')} above the average value.")
 
-        # Recommendations
+        if categorical_cols:
+            col = categorical_cols[0]
+            counts = {}
+            for row in rows:
+                key = str(row.get(col, "Unknown"))
+                counts[key] = counts.get(key, 0) + 1
+            sorted_c = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+            top3 = sum(v for _, v in sorted_c[:3])
+            top3_pct = (top3 / len(rows)) * 100 if rows else 0
+            trends.append(f'Top 3 categories in "{col.replace("_", " ")}" account for {top3_pct:.1f}% of all records.')
+
+        # High null rate trend
+        high_null = [p for p in column_profiles if p["null_count"] / p["total_count"] > 0.1]
+        if high_null:
+            worst = max(high_null, key=lambda p: p["null_count"])
+            null_pct = (worst["null_count"] / worst["total_count"]) * 100
+            trends.append(f'"{worst["key"].replace("_", " ")}" has the highest null rate at {null_pct:.1f}%.')
+
+        # ── Recommendations ──
         recommendations = []
         if categorical_cols and numeric_cols:
             cat_col = categorical_cols[0]
@@ -1065,6 +1231,10 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             recommendations.append(
                 f'Consider deeper time-series analysis on "{date_cols[0].replace("_", " ")}" to identify seasonal patterns.'
             )
+        if len(categorical_cols) >= 2:
+            recommendations.append(
+                f'Cross-tabulate "{categorical_cols[0].replace("_", " ")}" and "{categorical_cols[1].replace("_", " ")}" to discover interaction patterns.'
+            )
         recommendations.append("Export this analysis and share with stakeholders for data-driven decision making.")
 
         return {
@@ -1073,11 +1243,13 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
             "description": description,
             "trends": trends[:5],
             "recommendations": recommendations[:4],
+            "column_profiles": column_profiles,
             "meta": {
                 "total_records": len(df),
                 "numeric_columns": numeric_cols,
                 "categorical_columns": categorical_cols,
                 "date_columns": date_cols,
+                "boolean_columns": boolean_cols,
                 "total_columns": len(col_keys),
             },
         }
