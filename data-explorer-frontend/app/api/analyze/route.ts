@@ -113,7 +113,7 @@ function detectCategoricalColumns(
       if (dateCols.includes(col.key)) return false
       if (boolCols.includes(col.key)) return false
       const uniqueValues = new Set(rows.map((r) => String(r[col.key] ?? "")))
-      return uniqueValues.size > 1 && uniqueValues.size <= 100
+      return uniqueValues.size > 1
     })
     .map((col) => col.key)
 }
@@ -270,7 +270,7 @@ function computeKPIs(
   // Fill remaining KPI slots with categorical/text column unique counts
   const allChartable = columnProfiles.filter(
     (p) =>
-      (p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2 && p.distinct_count <= 50)) &&
+      (p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2)) &&
       !numericCols.includes(p.key)
   )
 
@@ -325,9 +325,9 @@ function generateCharts(
       .map(([name, value]) => ({ name, value }))
   }
 
-  // Helper: get all chartable columns (categorical + any column with <= 50 unique values)
+  // Helper: get all chartable columns (categorical + boolean + text with 2+ distinct values)
   const allChartableColumns = columnProfiles.filter(
-    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2 && p.distinct_count <= 50)
+    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2)
   )
 
   // 1. Time-series line chart
@@ -560,7 +560,7 @@ function generateDescription(
 
   // List all categorical/chartable columns
   const chartable = columnProfiles.filter(
-    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2 && p.distinct_count <= 50)
+    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2)
   )
   if (chartable.length > 0) {
     const descriptions = chartable.slice(0, 3).map((p) => `"${p.key.replace(/_/g, " ")}" (${p.distinct_count} unique)`)
@@ -572,7 +572,7 @@ function generateDescription(
   }
 
   // Text-heavy dataset insight
-  const textCols = columnProfiles.filter((p) => p.dtype === "text" && p.distinct_count > 50)
+  const textCols = columnProfiles.filter((p) => p.dtype === "text" && p.distinct_count === 1)
   if (textCols.length > 0 && numericCols.length === 0) {
     parts.push(`This is a text-heavy dataset with ${textCols.length} free-form text column(s).`)
   }
@@ -589,9 +589,9 @@ function generateTrends(
 ): string[] {
   const trends: string[] = []
 
-  // All chartable columns (including text with reasonable cardinality)
+  // All chartable columns (including text with 2+ distinct values)
   const chartable = columnProfiles.filter(
-    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2 && p.distinct_count <= 50)
+    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2)
   )
 
   if (categoricalCols.length > 0 && numericCols.length > 0) {
@@ -670,9 +670,9 @@ function generateRecommendations(
 ): string[] {
   const recs: string[] = []
 
-  // All chartable columns (including text with reasonable cardinality)
+  // All chartable columns (including text with 2+ distinct values)
   const chartable = columnProfiles.filter(
-    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2 && p.distinct_count <= 50)
+    (p) => p.dtype === "categorical" || p.dtype === "boolean" || (p.dtype === "text" && p.distinct_count >= 2)
   )
 
   if (categoricalCols.length > 0 && numericCols.length > 0) {

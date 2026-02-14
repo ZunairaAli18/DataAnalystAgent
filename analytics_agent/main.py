@@ -900,7 +900,7 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
         categorical_cols = [
             c for c in col_keys
             if c not in numeric_cols and c not in date_cols and c not in boolean_cols
-            and 1 < df[c].n_unique() <= 100
+            and df[c].n_unique() > 1
         ]
 
         # ── Build Column Profiles ──
@@ -1016,7 +1016,7 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
         all_chartable = [
             p for p in column_profiles
             if p["dtype"] in ("categorical", "boolean")
-            or (p["dtype"] == "text" and 2 <= p["distinct_count"] <= 50)
+            or (p["dtype"] == "text" and p["distinct_count"] >= 2)
         ]
 
         # Fill remaining KPI slots with unique counts from chartable columns
