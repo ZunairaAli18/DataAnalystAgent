@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import Groq from "groq-sdk"
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 interface ColumnMeta {
   key: string
@@ -299,7 +299,7 @@ function buildDataSummary(
 
     if (profile.top_values.length > 0) {
       lines.push(`  top_values:`)
-      profile.top_values.slice(0, 10).forEach((tv) => {
+      profile.top_values.slice(0, 5).forEach((tv) => {
         lines.push(`    "${tv.value}": ${tv.count} records (${tv.percentage}%)`)
       })
       const top1 = profile.top_values[0]?.percentage ?? 0
@@ -323,8 +323,8 @@ function buildDataSummary(
   // 3. CATEGORY x METRIC BREAKDOWNS
   if (categoricalCols.length > 0 && numericCols.length > 0) {
     lines.push("\n=== SECTION 3: CATEGORY x METRIC BREAKDOWNS ===")
-    for (const catCol of categoricalCols.slice(0, 4)) {
-      for (const numCol of numericCols.slice(0, 3)) {
+    for (const catCol of categoricalCols.slice(0, 2)) {
+      for (const numCol of numericCols.slice(0, 2)) {
         const grouped: Record<string, number[]> = {}
         rows.forEach((row) => {
           const key = String(row[catCol] ?? "Unknown")
@@ -348,7 +348,7 @@ function buildDataSummary(
         const totalSum = stats.reduce((s, r) => s + r.sum, 0)
         lines.push(`\n${numCol} BY ${catCol} (sorted by sum):`)
         lines.push(`  total_sum=${Math.round(totalSum * 100) / 100}  categories=${stats.length}`)
-        stats.slice(0, 12).forEach((s) => {
+        stats.slice(0, 6).forEach((s) => {
           const pct = totalSum > 0 ? ((s.sum / totalSum) * 100).toFixed(1) : "0"
           lines.push(`  "${s.cat}": sum=${Math.round(s.sum * 100) / 100}  pct=${pct}%  count=${s.count}  mean=${s.mean.toFixed(2)}  median=${s.median}`)
         })
@@ -498,16 +498,17 @@ function buildDataSummary(
     }
   })
 
-  // 8. SAMPLE DATA
-  lines.push("\n=== SECTION 8: SAMPLE DATA (first 25 rows) ===")
-  const sampleCols = columns.slice(0, 10).map((c) => c.key)
+  // 8. SAMPLE DATA — limited to 5 rows x 8 cols to save tokens
+  lines.push("\n=== SECTION 8: SAMPLE DATA (first 5 rows) ===")
+  const sampleCols = columns.slice(0, 8).map((c) => c.key)
   lines.push(sampleCols.join(" | "))
-  rows.slice(0, 25).forEach((row) => {
+  rows.slice(0, 5).forEach((row) => {
     lines.push(sampleCols.map((c) => String(row[c] ?? "").substring(0, 20)).join(" | "))
   })
 
   return lines.join("\n")
 }
+
 /* ── Debug Logger ── */
 
 function log(stage: string, data?: unknown) {
@@ -517,7 +518,6 @@ function log(stage: string, data?: unknown) {
   console.log(`[ANALYZE API] ${timestamp} │ ${stage}`)
   if (data !== undefined) {
     if (typeof data === "string") {
-      // For long strings (like prompts), show first + last 300 chars
       if (data.length > 800) {
         console.log(`  ▸ [${data.length} chars total]`)
         console.log(`  ▸ FIRST 400:\n${data.substring(0, 400)}`)
@@ -546,7 +546,7 @@ function logError(stage: string, error: unknown) {
   console.error("═".repeat(60))
 }
 
-/* ── AI Analysis via Gemini ── */
+/* ── AI Analysis via Groq ── */
 
 async function runAIAnalysis(dataSummary: string): Promise<{
   kpis: KPI[]
@@ -557,6 +557,15 @@ async function runAIAnalysis(dataSummary: string): Promise<{
   conclusions: Conclusion[]
 }> {
   const chartColors = ["#00d4ff", "#ff3d71", "#ffaa00", "#7c5cff", "#00e676"]
+
+  // Cap summary to ~8,000 tokens (≈32,000 chars) to stay under Groq's 12k TPM limit.
+  // The static prompt template consumes ~2,500 tokens; response needs ~1,500 tokens headroom.
+  const MAX_SUMMARY_CHARS = 14_000
+  const safeSummary =
+    dataSummary.length > MAX_SUMMARY_CHARS
+      ? dataSummary.substring(0, MAX_SUMMARY_CHARS) +
+        "\n\n[Summary truncated to fit token limit. Analyze what is provided above.]"
+      : dataSummary
 
   const prompt = `You are a senior data scientist and business analyst with 20 years of experience turning raw data into strategic insight. You will be given a pre-computed statistical summary of a dataset.
 
@@ -644,29 +653,33 @@ Recommendations: exactly 4. Specific enough to act on tomorrow. No vague advice.
 Conclusions: 6-8 total. Must include at least one of each category. Each must synthesize signals from at least 2 columns. The finding must be non-obvious — something you could not see by looking at a single number.
 
 === DATA SUMMARY ===
-${dataSummary}`
-
-
+${safeSummary}`
 
   // ── Log outgoing prompt ──
-  log("📤 SENDING PROMPT TO GEMINI", prompt)
+  log("📤 SENDING PROMPT TO GROQ", prompt)
   log("📊 PROMPT STATS", {
     total_chars: prompt.length,
     total_tokens_approx: Math.round(prompt.length / 4),
-    model: "gemini-2.0-flash",
+    summary_chars_original: dataSummary.length,
+    summary_chars_used: safeSummary.length,
+    summary_was_truncated: dataSummary.length > MAX_SUMMARY_CHARS,
+    model: "llama-3.3-70b-versatile",
   })
 
   const startTime = Date.now()
 
   let raw: string
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-    const result = await model.generateContent(prompt)
-    const response = result.response
-    raw = response.text().trim()
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3,
+      max_tokens: 2500,
+    })
+    raw = (completion.choices[0]?.message?.content ?? "").trim()
 
     const elapsed = Date.now() - startTime
-    log(`✅ RAW RESPONSE FROM GEMINI (${elapsed}ms)`, raw)
+    log(`✅ RAW RESPONSE FROM GROQ (${elapsed}ms)`, raw)
     log("📊 RESPONSE STATS", {
       response_chars: raw.length,
       response_tokens_approx: Math.round(raw.length / 4),
@@ -674,7 +687,7 @@ ${dataSummary}`
       starts_with_fence: raw.startsWith("```"),
     })
   } catch (error) {
-    logError("Gemini API call failed", error)
+    logError("Groq API call failed", error)
     throw error
   }
 
@@ -707,7 +720,7 @@ ${dataSummary}`
   } catch (parseError) {
     logError("JSON parse failed", parseError)
     log("💥 UNPARSEABLE RAW RESPONSE", raw)
-    throw new Error(`Failed to parse Gemini JSON response. Raw preview: ${raw.substring(0, 300)}`)
+    throw new Error(`Failed to parse Groq JSON response. Raw preview: ${raw.substring(0, 300)}`)
   }
 
   // Log the parsed KPIs and chart titles for quick inspection
