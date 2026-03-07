@@ -1,9 +1,8 @@
 name: data-explorer-app
 
 services:
-  # ── Next.js Frontend ──────────────────────────────────────────────
   - name: frontend
-    source_dir: /data-explorer-frontend
+    source_dir: data-explorer-frontend
     github:
       branch: main
       deploy_on_push: true
@@ -19,14 +18,13 @@ services:
       - key: GROQ_API_KEY
         scope: RUN_TIME
         type: SECRET
-        value: YOUR_GROQ_API_KEY_HERE
+        value: PLACEHOLDER
       - key: NEXT_PUBLIC_API_URL
         scope: BUILD_TIME
         value: ${backend.PUBLIC_URL}
 
-  # ── FastAPI Backend ───────────────────────────────────────────────
   - name: backend
-    source_dir: /analytics_agent
+    source_dir: analytics_agent
     github:
       branch: main
       deploy_on_push: true
