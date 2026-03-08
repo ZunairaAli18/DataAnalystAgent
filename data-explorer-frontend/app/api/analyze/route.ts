@@ -674,7 +674,7 @@ ${safeSummary}`
       model: "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.3,
-      max_tokens: 2500,
+      max_tokens: 6000,
     })
     raw = (completion.choices[0]?.message?.content ?? "").trim()
 
@@ -707,7 +707,7 @@ ${safeSummary}`
     conclusions: Conclusion[]
   }
 
-  try {
+ try {
     aiResult = JSON.parse(raw)
     log("✅ JSON PARSE SUCCESSFUL", {
       kpis_count: aiResult.kpis?.length ?? 0,
@@ -717,10 +717,31 @@ ${safeSummary}`
       conclusions_count: aiResult.conclusions?.length ?? 0,
       has_description: !!aiResult.description,
     })
-  } catch (parseError) {
-    logError("JSON parse failed", parseError)
-    log("💥 UNPARSEABLE RAW RESPONSE", raw)
-    throw new Error(`Failed to parse Groq JSON response. Raw preview: ${raw.substring(0, 300)}`)
+  } catch {
+    // Attempt to recover truncated JSON
+    let fixed = raw
+    const openBraces = (fixed.match(/\{/g) || []).length
+    const closeBraces = (fixed.match(/\}/g) || []).length
+    const openBrackets = (fixed.match(/\[/g) || []).length
+    const closeBrackets = (fixed.match(/\]/g) || []).length
+    fixed += "]".repeat(Math.max(0, openBrackets - closeBrackets))
+    fixed += "}".repeat(Math.max(0, openBraces - closeBraces))
+    try {
+      aiResult = JSON.parse(fixed)
+      log("🔧 RECOVERED TRUNCATED JSON", { added_chars: fixed.length - raw.length })
+      log("✅ JSON PARSE SUCCESSFUL (recovered)", {
+        kpis_count: aiResult.kpis?.length ?? 0,
+        charts_count: aiResult.charts?.length ?? 0,
+        trends_count: aiResult.trends?.length ?? 0,
+        recommendations_count: aiResult.recommendations?.length ?? 0,
+        conclusions_count: aiResult.conclusions?.length ?? 0,
+        has_description: !!aiResult.description,
+      })
+    } catch (parseError) {
+      logError("JSON parse failed even after recovery", parseError)
+      log("💥 UNPARSEABLE RAW RESPONSE", raw)
+      throw new Error(`Failed to parse Groq JSON response. Raw preview: ${raw.substring(0, 300)}`)
+    }
   }
 
   // Log the parsed KPIs and chart titles for quick inspection
