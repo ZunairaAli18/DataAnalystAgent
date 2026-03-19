@@ -9,6 +9,7 @@ import { Zap, Upload, CheckCircle, AlertCircle, Loader2, X, ArrowRight } from "l
 import { cn } from "@/lib/utils"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const PERSISTED_DATASET_KEY = "activeDatasetId"
 
 const tabs = ["Direct Connectors", "File Upload", "Raw Data Paste"]
 
@@ -47,7 +48,6 @@ export default function IngestionPage() {
     if (!files || files.length === 0) return
     const file = files[0]
     
-    // Validate file type
     const validTypes = [".csv", ".xlsx", ".xls", ".pdf"]
     const isValid = validTypes.some(type => file.name.toLowerCase().endsWith(type))
     
@@ -104,6 +104,11 @@ export default function IngestionPage() {
       }
 
       const data = await response.json()
+
+      // Replace the persisted dataset with the newly uploaded one
+      if (data.dataset_id) {
+        localStorage.setItem(PERSISTED_DATASET_KEY, data.dataset_id)
+      }
       
       setUploadState(prev => ({
         ...prev,
@@ -187,7 +192,6 @@ export default function IngestionPage() {
 
         {activeTab === "File Upload" && (
           <div className="max-w-2xl mx-auto space-y-6">
-            {/* Hidden file input */}
             <input
               ref={fileInputRef}
               type="file"
@@ -196,7 +200,6 @@ export default function IngestionPage() {
               className="hidden"
             />
 
-            {/* Drop zone */}
             <div
               onClick={() => fileInputRef.current?.click()}
               onDragOver={handleDragOver}
@@ -219,7 +222,6 @@ export default function IngestionPage() {
               <p className="text-sm text-muted-foreground">Supports CSV, Excel, and PDF files</p>
             </div>
 
-            {/* Selected file display */}
             {uploadState.file && (
               <div className="bg-card border border-border rounded-xl p-4">
                 <div className="flex items-center justify-between">
@@ -245,7 +247,6 @@ export default function IngestionPage() {
                   </button>
                 </div>
 
-                {/* Upload button */}
                 {uploadState.status === "idle" && (
                   <button
                     onClick={handleUpload}
@@ -255,7 +256,6 @@ export default function IngestionPage() {
                   </button>
                 )}
 
-                {/* Uploading state */}
                 {uploadState.status === "uploading" && (
                   <div className="mt-4 flex items-center justify-center gap-2 py-3 text-primary">
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -263,7 +263,6 @@ export default function IngestionPage() {
                   </div>
                 )}
 
-                {/* Success state */}
                 {uploadState.status === "success" && (
                   <div className="mt-4 space-y-3">
                     <div className="flex items-center gap-2 text-green-500">
@@ -293,7 +292,6 @@ export default function IngestionPage() {
                   </div>
                 )}
 
-                {/* Error state */}
                 {uploadState.status === "error" && (
                   <div className="mt-4 space-y-3">
                     <div className="flex items-center gap-2 text-destructive">
@@ -311,7 +309,6 @@ export default function IngestionPage() {
               </div>
             )}
 
-            {/* Error message without file */}
             {!uploadState.file && uploadState.status === "error" && (
               <div className="flex items-center gap-2 text-destructive bg-destructive/10 p-4 rounded-xl">
                 <AlertCircle className="w-5 h-5" />
@@ -330,7 +327,6 @@ export default function IngestionPage() {
           </div>
         )}
 
-        {/* Initiate AI Audit Button */}
         <div className="flex justify-center mt-12">
           <button className="flex items-center gap-2 px-8 py-3 bg-primary text-primary-foreground font-semibold rounded-full hover:bg-primary/90 transition-colors">
             INITIATE AI AUDIT

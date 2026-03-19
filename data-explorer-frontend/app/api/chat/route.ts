@@ -18,7 +18,7 @@ function isRateLimited(): boolean {
   return false
 }
 
-// ─── Retry with exponential back-off (no explicit return type — avoids SDK type mismatch) ───
+// ─── Retry with exponential back-off ─────────────────────────────────────────
 async function groqWithRetry(
   params: Parameters<typeof groq.chat.completions.create>[0],
   retries = 2
@@ -85,6 +85,52 @@ interface ChartOutput {
   color: string
 }
 
+// ─── Formula/metric detection ─────────────────────────────────────────────────
+
+function isFormulaRequest(question: string): boolean {
+  const q = question.toLowerCase()
+  return (
+    q.includes("churn") ||
+    q.includes("retention") ||
+    q.includes("growth rate") ||
+    q.includes("cagr") ||
+    q.includes("roi") ||
+    q.includes("margin") ||
+    q.includes("conversion rate") ||
+    q.includes("average order") ||
+    q.includes("lifetime value") ||
+    q.includes("ltv") ||
+    q.includes("clv") ||
+    q.includes("cac") ||
+    q.includes("acquisition cost") ||
+    q.includes("revenue per") ||
+    q.includes("cost per") ||
+    q.includes("calculate") ||
+    q.includes("formula") ||
+    q.includes("compute") ||
+    q.includes("percentage") ||
+    q.includes("ratio") ||
+    q.includes("rate of") ||
+    q.includes("month over month") ||
+    q.includes("year over year") ||
+    q.includes("yoy") ||
+    q.includes("mom") ||
+    q.includes("forecast") ||
+    q.includes("trend over") ||
+    q.includes("correlation")
+  )
+}
+
+function isChartRequest(question: string): boolean {
+  const q = question.toLowerCase()
+  return (
+    q.includes("chart") || q.includes("graph") || q.includes("plot") ||
+    q.includes("visuali") || q.includes("show me a") || q.includes("bar chart") ||
+    q.includes("pie chart") || q.includes("line chart") || q.includes("histogram") ||
+    q.includes("breakdown of") || q.includes("distribution of")
+  )
+}
+
 // ─── Context builders ─────────────────────────────────────────────────────────
 
 function buildDocumentContext(analysis: ChatRequest["analysis"], question?: string): string {
@@ -104,7 +150,19 @@ function buildDocumentContext(analysis: ChatRequest["analysis"], question?: stri
       q.includes(p.key.toLowerCase()) ||
       q.includes(p.key.replace(/_/g, " ").toLowerCase())
   )
-  const colsToShow = mentionedCols.length > 0 ? mentionedCols : column_profiles.slice(0, 6)
+
+  // For formula requests, include ALL numeric columns with full stats
+  const wantsFormula = isFormulaRequest(question ?? "")
+  let colsToShow: ColumnProfile[]
+
+  if (wantsFormula) {
+    // Prioritise mentioned cols, then all numeric, then top categorical
+    const numericProfiles = column_profiles.filter(p => p.dtype === "numeric" || p.dtype === "date")
+    const others = column_profiles.filter(p => p.dtype !== "numeric" && p.dtype !== "date").slice(0, 4)
+    colsToShow = [...new Set([...mentionedCols, ...numericProfiles, ...others])]
+  } else {
+    colsToShow = mentionedCols.length > 0 ? mentionedCols : column_profiles.slice(0, 6)
+  }
 
   lines.push("COLUMNS:")
   colsToShow.forEach((p) => {
@@ -112,18 +170,18 @@ function buildDocumentContext(analysis: ChatRequest["analysis"], question?: stri
     lines.push(`[${p.key}] ${p.dtype} distinct=${p.distinct_count} nulls=${nullPct}%`)
     if (p.stats) {
       lines.push(
-        `  min=${p.stats.min} max=${p.stats.max} mean=${p.stats.mean.toFixed(2)} sum=${p.stats.sum.toLocaleString()}`
+        `  min=${p.stats.min} max=${p.stats.max} mean=${p.stats.mean.toFixed(2)} median=${p.stats.median} sum=${p.stats.sum.toLocaleString()}`
       )
     }
     if (p.top_values.length > 0) {
-      const top = p.top_values.slice(0, 3).map((v) => `"${v.value}"(${v.percentage}%)`).join(",")
+      const top = p.top_values.slice(0, 5).map((v) => `"${v.value}"(${v.count},${v.percentage}%)`).join(",")
       lines.push(`  top:${top}`)
     }
   })
 
-  lines.push("SUMMARY:" + description.substring(0, 300))
-  lines.push("TRENDS:" + trends.slice(0, 3).map((t, i) => `${i + 1}.${t}`).join(" | "))
-  lines.push("RECS:" + recommendations.slice(0, 2).map((r, i) => `${i + 1}.${r}`).join(" | "))
+  lines.push("SUMMARY:" + description.substring(0, 400))
+  lines.push("TRENDS:" + trends.slice(0, 4).map((t, i) => `${i + 1}.${t}`).join(" | "))
+  lines.push("RECS:" + recommendations.slice(0, 3).map((r, i) => `${i + 1}.${r}`).join(" | "))
   if (conclusions?.length) {
     lines.push(
       "CONCLUSIONS:" + conclusions.slice(0, 4).map((c) => `${c.title}: ${c.finding}`).join(" | ")
@@ -149,16 +207,6 @@ function buildSuggestionsContext(analysis: ChatRequest["analysis"]): string {
   return lines.join("\n")
 }
 
-function isChartRequest(question: string): boolean {
-  const q = question.toLowerCase()
-  return (
-    q.includes("chart") || q.includes("graph") || q.includes("plot") ||
-    q.includes("visuali") || q.includes("show me a") || q.includes("bar chart") ||
-    q.includes("pie chart") || q.includes("line chart") || q.includes("histogram") ||
-    q.includes("breakdown of") || q.includes("distribution of")
-  )
-}
-
 // ─── Suggestions handler ──────────────────────────────────────────────────────
 
 async function handleSuggestions(analysis: ChatRequest["analysis"]): Promise<NextResponse> {
@@ -180,7 +228,7 @@ async function handleSuggestions(analysis: ChatRequest["analysis"]): Promise<Nex
         },
         {
           role: "user",
-          content: `Dataset:\n${documentContext}\n\nGenerate exactly 6 short questions (max 10 words each) a data analyst would ask about THIS data. Include: 2 trend questions, 2 segment/outlier questions, 1 cross-column relationship, 1 chart request. Each must reference actual column names or values.\n\nReturn ONLY: ["question1","question2","question3","question4","question5","question6"]`,
+          content: `Dataset:\n${documentContext}\n\nGenerate exactly 6 short questions (max 10 words each) a data analyst would ask about THIS data. Include: 1 trend question, 1 segment/outlier question, 1 cross-column relationship, 1 chart request, 1 formula/metric question (e.g. churn rate, growth rate, margin), 1 comparison question. Each must reference actual column names or values.\n\nReturn ONLY: ["question1","question2","question3","question4","question5","question6"]`,
         },
       ],
       temperature: 0.5,
@@ -233,6 +281,25 @@ export async function POST(request: NextRequest) {
 
     const documentContext = buildDocumentContext(analysis, question)
     const wantsChart = isChartRequest(question)
+    const wantsFormula = isFormulaRequest(question)
+
+    const formulaGuidance = wantsFormula ? `
+FORMULA & METRIC RULES:
+- You CAN calculate derived metrics using the column stats provided (min, max, mean, median, sum, counts, top_values with counts and percentages).
+- Supported calculations from available data:
+  • Churn Rate = (lost customers / total customers at start) × 100 — use count/distinct values to approximate if a status/churn column exists
+  • Retention Rate = 100 - Churn Rate
+  • Growth Rate = ((current - previous) / previous) × 100 — use min/max or top_values time periods
+  • Margin = ((revenue - cost) / revenue) × 100 — if both revenue and cost columns exist
+  • Conversion Rate = (converted / total) × 100 — use top_values counts for boolean/status columns
+  • Average Order Value = sum(revenue) / count(orders)
+  • Revenue per Customer = sum(revenue) / distinct_count(customer column)
+  • Month-over-Month or Year-over-Year: derive from top_values on date columns showing period counts
+  • Ratio/Percentage: any two numeric columns can be divided or compared
+- Show your working: state which columns and values you used, write out the formula, then compute the result.
+- If exact calculation is impossible (data not granular enough), clearly say what approximation you made and why.
+- NEVER fabricate numbers. If a metric truly cannot be computed from the available stats, explain what additional data would be needed.
+` : ""
 
     const systemPrompt = `You are a data analyst assistant locked to a single dataset. You ONLY answer questions about THIS specific dataset described below.
 
@@ -242,7 +309,9 @@ STRICT RULES:
 3. Always cite the exact column name or statistic from the context.
 4. Be concise — lead with the answer, then support with data evidence.
 5. Use **bold** for key numbers and column names.
-${wantsChart ? `6. After your explanation, append EXACTLY:
+6. For calculations, always show: Formula used → Values plugged in → Result.
+${formulaGuidance}
+${wantsChart ? `CHART RULE: After your explanation, append EXACTLY:
 CHART_JSON:{"type":"bar|line|pie","title":"insight title","description":"what this reveals","data":[{"name":"label","value":123}],"xKey":"name","yKey":"value","color":"#00d4ff"}
 - Use ONLY values from the context. bar=comparisons, line=time trends, pie=composition (max 6 slices). 5-12 data points.` : ""}
 
@@ -262,7 +331,8 @@ ${documentContext}`
       model: "llama-3.3-70b-versatile",
       messages,
       temperature: 0.2,
-      max_tokens: wantsChart ? 600 : 350,
+      // Give more tokens for formula answers so working is shown in full
+      max_tokens: wantsFormula ? 800 : wantsChart ? 600 : 350,
     })
 
     const raw = completion.choices[0]?.message?.content ?? "Sorry, I could not generate a response."

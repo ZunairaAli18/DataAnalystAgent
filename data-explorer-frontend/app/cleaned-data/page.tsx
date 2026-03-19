@@ -43,7 +43,6 @@ export default function CleanedDataPage() {
   const [pagination, setPagination] = useState({ limit: 50, offset: 0 })
 
   useEffect(() => {
-    // Load cleaned data from localStorage
     const loadCleanedData = () => {
       try {
         const storedData = localStorage.getItem("cleanedDataResult")
@@ -59,7 +58,6 @@ export default function CleanedDataPage() {
         
         const result = JSON.parse(storedData)
         
-        // Convert column names to Column objects if they're just strings
         const columns: Column[] = result.columns.map((col: string | Column) => {
           if (typeof col === "string") {
             return { key: col, label: col }
@@ -75,6 +73,7 @@ export default function CleanedDataPage() {
           summary: result.cleaning_summary,
           factorsApplied: result.factors_applied || [],
         })
+        // ✅ No cache clearing here — cache is only cleared when user clicks Analyze
       } catch (error) {
         setData(prev => ({
           ...prev,
@@ -87,7 +86,14 @@ export default function CleanedDataPage() {
     loadCleanedData()
   }, [])
 
-  // Get paginated rows
+  // ✅ Only clear dashboard cache when user explicitly clicks Analyze
+  const handleAnalyze = () => {
+    localStorage.removeItem("dashboardAnalysisResult")
+    localStorage.removeItem("dashboardDataHash")
+    localStorage.removeItem("dashboardRawRows")
+    router.push(`/dashboard?dataset_id=${datasetId}`)
+  }
+
   const paginatedRows = data.rows.slice(pagination.offset, pagination.offset + pagination.limit)
   const totalCount = data.rows.length
 
@@ -117,7 +123,6 @@ export default function CleanedDataPage() {
   const handleExport = () => {
     if (data.rows.length === 0) return
     
-    // Convert to CSV
     const headers = data.columns.map(col => col.key).join(",")
     const rows = data.rows.map(row => 
       data.columns.map(col => {
@@ -177,8 +182,9 @@ export default function CleanedDataPage() {
                 <Download className="w-4 h-4" />
                 Export CSV
               </button>
+              {/* ✅ Uses handleAnalyze instead of inline router.push */}
               <button
-                onClick={() => router.push(`/dashboard?dataset_id=${datasetId}`)}
+                onClick={handleAnalyze}
                 disabled={data.rows.length === 0}
                 className="flex items-center gap-2 px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >

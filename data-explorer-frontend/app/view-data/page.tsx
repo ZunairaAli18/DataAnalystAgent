@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const PERSISTED_DATASET_KEY = "activeDatasetId"
 
 interface Column {
   key: string
@@ -58,8 +59,30 @@ const CLEANING_FACTORS = [
 export default function ViewDataPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const datasetId = searchParams.get("dataset_id")
-  
+
+  // Use URL param if present, otherwise fall back to persisted dataset
+  const urlDatasetId = searchParams.get("dataset_id")
+  const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null)
+
+  // On mount: resolve which dataset ID to use and persist it
+  useEffect(() => {
+    if (urlDatasetId) {
+      // New dataset from URL — save it and use it
+      localStorage.setItem(PERSISTED_DATASET_KEY, urlDatasetId)
+      setActiveDatasetId(urlDatasetId)
+    } else {
+      // No URL param — restore last used dataset
+      const persisted = localStorage.getItem(PERSISTED_DATASET_KEY)
+      if (persisted) {
+        setActiveDatasetId(persisted)
+        // Optionally sync URL without navigation
+        router.replace(`/view-data?dataset_id=${persisted}`)
+      }
+    }
+  }, [urlDatasetId])
+
+  const datasetId = activeDatasetId
+
   const [data, setData] = useState<DataState>({
     columns: [],
     rows: [],
@@ -84,9 +107,7 @@ export default function ViewDataPage() {
       setData(prev => ({ ...prev, loading: true, error: null }))
       
       try {
-        const response = await fetch(
-          `${API_BASE_URL}/data/${datasetId}`
-        )
+        const response = await fetch(`${API_BASE_URL}/data/${datasetId}`)
         
         if (!response.ok) {
           throw new Error(`Failed to fetch data: ${response.statusText}`)
@@ -128,7 +149,6 @@ export default function ViewDataPage() {
   const currentPage = Math.floor(pagination.offset / pagination.limit) + 1
   const totalPages = Math.ceil(data.totalCount / pagination.limit)
 
-  // Detect anomalies when Clean button is clicked
   const handleDetectAnomalies = async () => {
     if (!datasetId) return
     
@@ -159,7 +179,6 @@ export default function ViewDataPage() {
     }
   }
 
-  // Toggle factor selection
   const toggleFactor = (factorId: string) => {
     setAnomalyState(prev => ({
       ...prev,
@@ -169,7 +188,6 @@ export default function ViewDataPage() {
     }))
   }
 
-  // Clean data with selected factors
   const handleCleanData = async () => {
     if (!datasetId || anomalyState.selectedFactors.length === 0) return
     
@@ -187,14 +205,12 @@ export default function ViewDataPage() {
       }
       
       const result = await response.json()
-       // Store the cleaned data in localStorage to pass to the cleaned-data page
       localStorage.setItem("cleanedDataResult", JSON.stringify({
         cleaned_data: result.cleaned_data,
         columns: result.columns,
         cleaning_summary: result.cleaning_summary,
         factors_applied: anomalyState.selectedFactors,
       }))
-      // Navigate to cleaned data page with the new dataset ID
       setShowCleanModal(false)
       router.push(`/cleaned-data?dataset_id=${datasetId}&cleaned_id=${result.cleaned_dataset_id}`)
     } catch (error) {
@@ -206,7 +222,6 @@ export default function ViewDataPage() {
     }
   }
 
-  // Format cell value for display
   const formatCellValue = (value: unknown): string => {
     if (value === null || value === undefined) return "-"
     if (typeof value === "number") return value.toLocaleString()
@@ -214,9 +229,6 @@ export default function ViewDataPage() {
     if (typeof value === "object") return JSON.stringify(value)
     return String(value)
   }
-
-  const columns = data.columns;
-  const tableData = data.rows;
 
   return (
     <AppLayout>
@@ -233,7 +245,6 @@ export default function ViewDataPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {/* Loading state */}
           {anomalyState.loading && (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
@@ -241,7 +252,6 @@ export default function ViewDataPage() {
             </div>
           )}
 
-          {/* Error state */}
           {anomalyState.error && (
             <div className="flex items-center gap-2 p-4 bg-destructive/10 text-destructive rounded-lg">
               <AlertCircle className="w-5 h-5" />
@@ -249,10 +259,8 @@ export default function ViewDataPage() {
             </div>
           )}
 
-          {/* Anomalies detected */}
           {!anomalyState.loading && !anomalyState.error && (
             <div className="space-y-4">
-              {/* Detected anomalies summary */}
               {anomalyState.anomalies.length > 0 && (
                 <div className="p-4 bg-secondary/50 rounded-lg">
                   <h4 className="text-sm font-semibold text-foreground mb-2">Detected Issues</h4>
@@ -269,7 +277,6 @@ export default function ViewDataPage() {
                 </div>
               )}
 
-              {/* Cleaning factors selection */}
               <div>
                 <h4 className="text-sm font-semibold text-foreground mb-3">Select Cleaning Actions</h4>
                 <div className="space-y-2">
@@ -311,7 +318,6 @@ export default function ViewDataPage() {
                 </div>
               </div>
 
-              {/* Action buttons */}
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-border">
                 <button
                   onClick={() => setShowCleanModal(false)}
@@ -341,8 +347,8 @@ export default function ViewDataPage() {
           )}
         </DialogContent>
       </Dialog>
+
       <div className="p-8">
-        {/* Header */}
         <div className="mb-8 flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold text-foreground mb-2">Data Explorer</h1>
@@ -366,7 +372,6 @@ export default function ViewDataPage() {
           )}
         </div>
 
-        {/* No dataset selected */}
         {!datasetId && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <AlertCircle className="w-12 h-12 text-muted-foreground mb-4" />
@@ -377,7 +382,6 @@ export default function ViewDataPage() {
           </div>
         )}
 
-        {/* Loading state */}
         {datasetId && data.loading && (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
@@ -385,7 +389,6 @@ export default function ViewDataPage() {
           </div>
         )}
 
-        {/* Error state */}
         {datasetId && data.error && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <AlertCircle className="w-12 h-12 text-destructive mb-4" />
@@ -394,7 +397,6 @@ export default function ViewDataPage() {
           </div>
         )}
 
-        {/* Data Table */}
         {datasetId && !data.loading && !data.error && data.rows.length > 0 && (
           <div className="rounded-xl border border-border bg-card overflow-hidden">
             <div className="overflow-x-auto">
@@ -425,7 +427,6 @@ export default function ViewDataPage() {
               </table>
             </div>
 
-            {/* Footer with pagination */}
             <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-secondary/30">
               <span className="text-xs text-muted-foreground tracking-wide">
                 SHOWING {pagination.offset + 1} - {Math.min(pagination.offset + pagination.limit, data.totalCount)} OF {data.totalCount.toLocaleString()} RECORDS
@@ -462,7 +463,6 @@ export default function ViewDataPage() {
           </div>
         )}
 
-        {/* Empty state */}
         {datasetId && !data.loading && !data.error && data.rows.length === 0 && data.columns.length > 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <AlertCircle className="w-12 h-12 text-muted-foreground mb-4" />
