@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const PERSISTED_DATASET_KEY = "activeDatasetId"
 
-const tabs = ["Direct Connectors", "File Upload", "Raw Data Paste"]
+const tabs = ["Direct Connectors", "File Upload"]
 
 const connectors = [
   { id: "sap", name: "SAP ERP", letter: "S", color: "bg-cyan-500" },
@@ -318,14 +318,6 @@ export default function IngestionPage() {
           </div>
         )}
 
-        {activeTab === "Raw Data Paste" && (
-          <div className="max-w-2xl mx-auto">
-            <textarea
-              placeholder="Paste your raw data here (CSV, JSON, or tab-separated values)..."
-              className="w-full h-64 p-4 rounded-xl bg-card border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-            />
-          </div>
-        )}
 
         <div className="flex justify-center mt-12">
           <button className="flex items-center gap-2 px-8 py-3 bg-primary text-primary-foreground font-semibold rounded-full hover:bg-primary/90 transition-colors">
