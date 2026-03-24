@@ -10,7 +10,7 @@ const navItems = [
   { href: "/view-data", label: "View Data", icon: Table },
   { href: "/cleaned-data", label: "Cleaned Data", icon: Database },
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
-  { href: "/ai-analyst", label: "AI Analyst", icon: MessageSquare },
+  // { href: "/ai-analyst", label: "AI Analyst", icon: MessageSquare },
 ]
 
 export function Sidebar() {
@@ -21,10 +21,10 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex items-center gap-3 p-6">
         <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary text-primary-foreground font-bold text-lg">
-          A
+          E
         </div>
         <div>
-          <div className="font-bold text-foreground tracking-wide">AVANTE</div>
+          <div className="font-bold text-foreground tracking-wide">Evolve AI</div>
           <div className="text-xs text-primary tracking-widest">SOFT BI</div>
         </div>
       </div>

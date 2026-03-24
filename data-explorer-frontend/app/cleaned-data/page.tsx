@@ -31,7 +31,8 @@ export default function CleanedDataPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const datasetId = searchParams.get("dataset_id")
-  
+  const cleanedId = searchParams.get("cleaned_id")
+
   const [data, setData] = useState<CleanedDataState>({
     columns: [],
     rows: [],
@@ -41,30 +42,19 @@ export default function CleanedDataPage() {
     factorsApplied: [],
   })
   const [pagination, setPagination] = useState({ limit: 50, offset: 0 })
-
+  
   useEffect(() => {
-    const loadCleanedData = () => {
-      try {
-        const storedData = localStorage.getItem("cleanedDataResult")
-        
-        if (!storedData) {
-          setData(prev => ({
-            ...prev,
-            loading: false,
-            error: "No cleaned data found. Please clean your data from the Data Explorer page.",
-          }))
-          return
-        }
-        
+  const loadCleanedData = async () => {
+    try {
+      const storedData = localStorage.getItem("cleanedDataResult")
+
+      if (storedData) {
+        // Small dataset — use localStorage
         const result = JSON.parse(storedData)
-        
         const columns: Column[] = result.columns.map((col: string | Column) => {
-          if (typeof col === "string") {
-            return { key: col, label: col }
-          }
+          if (typeof col === "string") return { key: col, label: col }
           return col
         })
-        
         setData({
           columns,
           rows: result.cleaned_data,
@@ -73,18 +63,82 @@ export default function CleanedDataPage() {
           summary: result.cleaning_summary,
           factorsApplied: result.factors_applied || [],
         })
-        // ✅ No cache clearing here — cache is only cleared when user clicks Analyze
-      } catch (error) {
+      } else if (cleanedId) {
+        // Large dataset — fetch from API
+        const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+        const response = await fetch(`${API_BASE_URL}/data/${cleanedId}`)
+        if (!response.ok) throw new Error("Failed to fetch cleaned data")
+        const result = await response.json()
+        const columns: Column[] = result.columns.map((col: { key: string; label: string }) => col)
+        setData({
+          columns,
+          rows: result.rows,
+          loading: false,
+          error: null,
+          summary: result.cleaning_summary || null,
+          factorsApplied: [],
+        })
+      } else {
         setData(prev => ({
           ...prev,
           loading: false,
-          error: error instanceof Error ? error.message : "Failed to load cleaned data",
+          error: "No cleaned data found. Please clean your data from the Data Explorer page.",
         }))
       }
+    } catch (error) {
+      setData(prev => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : "Failed to load cleaned data",
+      }))
     }
+  }
 
-    loadCleanedData()
-  }, [])
+  loadCleanedData()
+}, [cleanedId])
+  // useEffect(() => {
+  //   const loadCleanedData = () => {
+  //     try {
+  //       const storedData = localStorage.getItem("cleanedDataResult")
+        
+  //       if (!storedData) {
+  //         setData(prev => ({
+  //           ...prev,
+  //           loading: false,
+  //           error: "No cleaned data found. Please clean your data from the Data Explorer page.",
+  //         }))
+  //         return
+  //       }
+        
+  //       const result = JSON.parse(storedData)
+        
+  //       const columns: Column[] = result.columns.map((col: string | Column) => {
+  //         if (typeof col === "string") {
+  //           return { key: col, label: col }
+  //         }
+  //         return col
+  //       })
+        
+  //       setData({
+  //         columns,
+  //         rows: result.cleaned_data,
+  //         loading: false,
+  //         error: null,
+  //         summary: result.cleaning_summary,
+  //         factorsApplied: result.factors_applied || [],
+  //       })
+  //       // ✅ No cache clearing here — cache is only cleared when user clicks Analyze
+  //     } catch (error) {
+  //       setData(prev => ({
+  //         ...prev,
+  //         loading: false,
+  //         error: error instanceof Error ? error.message : "Failed to load cleaned data",
+  //       }))
+  //     }
+  //   }
+
+  //   loadCleanedData()
+  // }, [])
 
   // ✅ Only clear dashboard cache when user explicitly clicks Analyze
   const handleAnalyze = () => {

@@ -115,7 +115,16 @@ def background_processing(dataset_id: str, df_func, db: Session, *args):
         db.commit()
 
 # --- ENDPOINTS ---
-
+@app.get("/data/{dataset_id}/status")
+async def get_dataset_status(dataset_id: str, db: Session = Depends(get_db)):
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return {
+        "dataset_id": dataset_id,
+        "status": dataset.status,
+        "name": dataset.name,
+    }
 @app.post("/ingest/upload")
 async def upload_file(
     background_tasks: BackgroundTasks, 
@@ -129,22 +138,170 @@ async def upload_file(
     db.add(new_ds)
     db.commit()
 
-    if file.filename.endswith('.csv'):
+    filename_lower = file.filename.lower()
+
+    if filename_lower.endswith('.csv'):
         import polars as pl
-       
-        # ADD THESE PARAMETERS:
         reader = lambda: pl.read_csv(
             BytesIO(content),
-            truncate_ragged_lines=True,  # Ignores extra columns in "dirty" rows
-            infer_schema_length=10000,   # Checks more rows to guess types accurately
-            ignore_errors=True,          # Skips lines that are totally broken
-            encoding="utf8-lossy"        # Handles non-UTF-8 chars (Latin-1, Windows-1252, etc.)
+            truncate_ragged_lines=True,
+            infer_schema_length=10000,
+            ignore_errors=True,
+            encoding="utf8-lossy"
         )
+
+    elif filename_lower.endswith('.pdf'):
+        import pdfplumber
+        import polars as pl
+        import re
+
+        def parse_pdf():
+            all_table_rows = []
+            all_text_chunks = []
+
+            with pdfplumber.open(BytesIO(content)) as pdf:
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    tables = page.extract_tables()
+                    full_text = page.extract_text() or ""
+
+                    if tables:
+                        for table in tables:
+                            if not table or len(table) < 2:
+                                continue
+                            raw_headers = table[0]
+                            headers = [
+                                str(h).strip().replace(" ", "_").lower() if h else f"col_{i}"
+                                for i, h in enumerate(raw_headers)
+                            ]
+                            seen = {}
+                            deduped = []
+                            for h in headers:
+                                if h in seen:
+                                    seen[h] += 1
+                                    deduped.append(f"{h}_{seen[h]}")
+                                else:
+                                    seen[h] = 0
+                                    deduped.append(h)
+                            headers = deduped
+
+                            for row in table[1:]:
+                                if not any(cell for cell in row if cell):
+                                    continue
+                                row_dict = {
+                                    headers[i]: (str(v).strip() if v else "")
+                                    for i, v in enumerate(row)
+                                    if i < len(headers)
+                                }
+                                row_dict["_page"] = page_num
+                                row_dict["_source"] = "table"
+                                all_table_rows.append(row_dict)
+
+                    if full_text:
+                        current_section = "general"
+                        paragraph_buffer = []
+
+                        for line in full_text.splitlines():
+                            line = line.strip()
+                            if not line:
+                                if paragraph_buffer:
+                                    paragraph_text = " ".join(paragraph_buffer)
+                                    all_text_chunks.append({
+                                        "section": current_section,
+                                        "type": "paragraph",
+                                        "content": paragraph_text,
+                                        "_page": page_num,
+                                        "_source": "text",
+                                        "_char_count": len(paragraph_text),
+                                    })
+                                    paragraph_buffer = []
+                                continue
+
+                            is_heading = (
+                                re.match(r'^[A-Z][A-Z\s]{4,}$', line) or
+                                (len(line) < 60 and re.match(r'^[A-Z][a-z]', line) and line.endswith(':')) or
+                                re.match(r'^\d+\.\s+[A-Z]', line)
+                            )
+
+                            if is_heading and not paragraph_buffer:
+                                current_section = re.sub(r'^\d+\.\s+', '', line).lower().strip().replace(" ", "_")
+                                all_text_chunks.append({
+                                    "section": current_section,
+                                    "type": "heading",
+                                    "content": line,
+                                    "_page": page_num,
+                                    "_source": "text",
+                                    "_char_count": len(line),
+                                })
+                            else:
+                                paragraph_buffer.append(line)
+
+                        if paragraph_buffer:
+                            paragraph_text = " ".join(paragraph_buffer)
+                            all_text_chunks.append({
+                                "section": current_section,
+                                "type": "paragraph",
+                                "content": paragraph_text,
+                                "_page": page_num,
+                                "_source": "text",
+                                "_char_count": len(paragraph_text),
+                            })
+
+            if len(all_table_rows) > len(all_text_chunks):
+                rows = all_table_rows
+            elif all_text_chunks and not all_table_rows:
+                rows = all_text_chunks
+            else:
+                rows = all_table_rows if all_table_rows else all_text_chunks
+
+            if not rows:
+                raise ValueError(f"No extractable content in: {file.filename}")
+
+            all_keys = list(dict.fromkeys(k for row in rows for k in row))
+            normalized = [{k: row.get(k, "") for k in all_keys} for row in rows]
+
+            return pl.DataFrame(normalized)
+
+        reader = parse_pdf
+
     else:
         reader = lambda: SupabaseDataEngine.handle_excel(content)
+
     print(reader, "this is ")
     background_tasks.add_task(background_processing, dataset_id, reader, db)
     return {"dataset_id": dataset_id, "message": "File upload started"}
+
+
+@app.post("/ingest/quickbooks")
+async def ingest_quickbooks(
+    background_tasks: BackgroundTasks,
+    client_id: str = Form(...),
+    client_secret: str = Form(...),
+    realm_id: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    dataset_id = str(uuid.uuid4())
+
+    new_ds = Dataset(
+        id=dataset_id,
+        name=f"QuickBooks {realm_id}",
+        source_type="quickbooks",
+        status="processing"
+    )
+    db.add(new_ds)
+    db.commit()
+
+    # Pass db as the second argument to your existing background_processing
+    background_tasks.add_task(
+        background_processing,
+        dataset_id,
+        SupabaseDataEngine.handle_quickbooks,
+        db,
+        client_id,
+        client_secret,
+        realm_id
+    )
+
+    return {"dataset_id": dataset_id, "message": "QuickBooks ingestion started"}
 
 @app.post("/ingest/sql")
 async def ingest_sql(
@@ -171,6 +328,31 @@ async def ingest_sql(
     )
     return {"dataset_id": dataset_id, "message": "SQL ingestion started"}
 
+# @app.post("/ingest/shopify")
+# async def ingest_shopify(
+#     background_tasks: BackgroundTasks,
+#     shop_url: str = Form(...),
+#     token: str = Form(...),
+#     resource: str = Form("orders"),
+#     db: Session = Depends(get_db)
+# ):
+#     """Handles Shopify API data"""
+#     dataset_id = str(uuid.uuid4())
+    
+#     new_ds = Dataset(id=dataset_id, name=f"Shopify {resource}", source_type="shopify", status="processing")
+#     db.add(new_ds)
+#     db.commit()
+
+#     background_tasks.add_task(
+#         background_processing, 
+#         dataset_id, 
+#         SupabaseDataEngine.handle_shopify, 
+#         db, 
+#         shop_url, 
+#         token, 
+#         resource
+#     )
+#     return {"dataset_id": dataset_id, "message": "Shopify sync started"}
 @app.post("/ingest/shopify")
 async def ingest_shopify(
     background_tasks: BackgroundTasks,
@@ -179,24 +361,26 @@ async def ingest_shopify(
     resource: str = Form("orders"),
     db: Session = Depends(get_db)
 ):
-    """Handles Shopify API data"""
     dataset_id = str(uuid.uuid4())
-    
-    new_ds = Dataset(id=dataset_id, name=f"Shopify {resource}", source_type="shopify", status="processing")
+
+    new_ds = Dataset(
+        id=dataset_id,
+        name=f"Shopify {resource.title()}",
+        source_type="shopify",
+        status="processing"
+    )
     db.add(new_ds)
     db.commit()
 
     background_tasks.add_task(
-        background_processing, 
-        dataset_id, 
-        SupabaseDataEngine.handle_shopify, 
-        db, 
-        shop_url, 
-        token, 
+        background_processing,
+        dataset_id,
+        SupabaseDataEngine.handle_shopify,
+        shop_url,
+        token,
         resource
     )
-    return {"dataset_id": dataset_id, "message": "Shopify sync started"}
-
+    return {"dataset_id": dataset_id, "message": "Shopify ingestion started"}
 from fastapi import HTTPException, Query
 
 @app.get("/data/{dataset_id}")
@@ -210,7 +394,36 @@ async def get_dataset_data(
         return SupabaseDataEngine.get_dataset_data(dataset_id, limit, offset)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Dataset not found: {str(e)}")
-    
+
+@app.post("/ingest/sheets")
+async def ingest_google_sheets(
+    background_tasks: BackgroundTasks,
+    spreadsheet_id: str = Form(...),
+    sheet_name: str = Form("Sheet1"),
+    service_account_json: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    dataset_id = str(uuid.uuid4())
+
+    new_ds = Dataset(
+        id=dataset_id,
+        name=f"Google Sheets - {sheet_name}",
+        source_type="google_sheets",
+        status="processing"
+    )
+    db.add(new_ds)
+    db.commit()
+
+    background_tasks.add_task(
+        background_processing,
+        dataset_id,
+        SupabaseDataEngine.handle_google_sheets,
+        spreadsheet_id,
+        sheet_name,
+        service_account_json
+    )
+    return {"dataset_id": dataset_id, "message": "Google Sheets ingestion started"}
+ 
 @app.get("/datasets")
 async def list_datasets():
     """
@@ -288,7 +501,8 @@ async def clean_data(dataset_id: str, request: CleanRequest):
         return {
             "cleaned_data": result["cleaned_data"],
             "columns": result["columns"],
-            "cleaning_summary": result["summary"]
+            "cleaning_summary": result["summary"],
+            "cleaned_dataset_id": result.get("cleaned_dataset_id", dataset_id)
         }
     except Exception as e:
       import traceback
@@ -305,6 +519,39 @@ async def export_data(dataset_id: str):
     # Return CSV file download
     pass
     
+@app.post("/ingest/sap")
+async def ingest_sap(
+    background_tasks: BackgroundTasks,
+    host_url: str = Form(...),
+    client_id: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    entity: str = Form("SalesOrders"),  # SAP OData entity
+    db: Session = Depends(get_db)
+):
+    dataset_id = str(uuid.uuid4())
+    
+    new_ds = Dataset(
+        id=dataset_id,
+        name=f"SAP {entity}",
+        source_type="sap",
+        status="processing"
+    )
+    db.add(new_ds)
+    db.commit()
+
+    background_tasks.add_task(
+        background_processing,
+        dataset_id,
+        SupabaseDataEngine.handle_sap,
+        host_url,
+        client_id,
+        username,
+        password,
+        entity
+    )
+    return {"dataset_id": dataset_id, "message": "SAP ingestion started"}
+
 @app.post("/datasets/{dataset_id}/rollback")
 async def rollback_to_version(
     dataset_id: str,

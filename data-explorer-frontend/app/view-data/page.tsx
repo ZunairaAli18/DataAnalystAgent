@@ -100,40 +100,94 @@ export default function ViewDataPage() {
   })
   const [cleaningInProgress, setCleaningInProgress] = useState(false)
 
-  useEffect(() => {
-    if (!datasetId) return
+  // useEffect(() => {
+  //   if (!datasetId) return
 
-    const fetchData = async () => {
-      setData(prev => ({ ...prev, loading: true, error: null }))
+  //   const fetchData = async () => {
+  //     setData(prev => ({ ...prev, loading: true, error: null }))
       
-      try {
-        const response = await fetch(`${API_BASE_URL}/data/${datasetId}`)
+  //     try {
+  //       const response = await fetch(`${API_BASE_URL}/data/${datasetId}`)
         
-        if (!response.ok) {
-          throw new Error(`Failed to fetch data: ${response.statusText}`)
-        }
+  //       if (!response.ok) {
+  //         throw new Error(`Failed to fetch data: ${response.statusText}`)
+  //       }
         
-        const result = await response.json()
+  //       const result = await response.json()
         
-        setData({
-          columns: result.columns,
-          rows: result.rows,
-          totalCount: result.total_count,
-          loading: false,
-          error: null,
-        })
-      } catch (error) {
+  //       setData({
+  //         columns: result.columns,
+  //         rows: result.rows,
+  //         totalCount: result.total_count,
+  //         loading: false,
+  //         error: null,
+  //       })
+  //     } catch (error) {
+  //       setData(prev => ({
+  //         ...prev,
+  //         loading: false,
+  //         error: error instanceof Error ? error.message : "Failed to load data",
+  //       }))
+  //     }
+  //   }
+
+  //   fetchData()
+  // }, [datasetId, pagination])
+useEffect(() => {
+  if (!datasetId) return
+
+  let pollInterval: NodeJS.Timeout
+
+  const fetchData = async () => {
+    setData(prev => ({ ...prev, loading: true, error: null }))
+    try {
+      const response = await fetch(`${API_BASE_URL}/data/${datasetId}`)
+      if (!response.ok) throw new Error(`Failed to fetch data: ${response.statusText}`)
+      const result = await response.json()
+      setData({
+        columns: result.columns,
+        rows: result.rows,
+        totalCount: result.total_count,
+        loading: false,
+        error: null,
+      })
+    } catch (error) {
+      setData(prev => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : "Failed to load data",
+      }))
+    }
+  }
+
+  const pollStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/data/${datasetId}/status`)
+      if (!res.ok) return
+      const { status } = await res.json()
+
+      if (status === "ready") {
+        clearInterval(pollInterval)
+        fetchData()
+      } else if (status === "failed") {
+        clearInterval(pollInterval)
         setData(prev => ({
           ...prev,
           loading: false,
-          error: error instanceof Error ? error.message : "Failed to load data",
+          error: "Dataset processing failed. Please re-upload the file.",
         }))
       }
+    } catch {
+      // network error — keep polling
     }
+  }
 
-    fetchData()
-  }, [datasetId, pagination])
+  setData(prev => ({ ...prev, loading: true, error: null }))
+  pollStatus()
+  pollInterval = setInterval(pollStatus, 2000)
 
+  return () => clearInterval(pollInterval)
+}, [datasetId]) 
   const handleNextPage = () => {
     if (pagination.offset + pagination.limit < data.totalCount) {
       setPagination(prev => ({ ...prev, offset: prev.offset + prev.limit }))
@@ -205,12 +259,26 @@ export default function ViewDataPage() {
       }
       
       const result = await response.json()
-      localStorage.setItem("cleanedDataResult", JSON.stringify({
+
+      const payload = JSON.stringify({
         cleaned_data: result.cleaned_data,
         columns: result.columns,
         cleaning_summary: result.cleaning_summary,
         factors_applied: anomalyState.selectedFactors,
-      }))
+      })
+
+      const SIZE_LIMIT = 2 * 1024 * 1024 // 2MB
+
+      if (payload.length < SIZE_LIMIT) {
+        try {
+          localStorage.setItem("cleanedDataResult", payload)
+        } catch {
+          localStorage.removeItem("cleanedDataResult")
+        }
+      } else {
+        localStorage.removeItem("cleanedDataResult")
+      }
+
       setShowCleanModal(false)
       router.push(`/cleaned-data?dataset_id=${datasetId}&cleaned_id=${result.cleaned_dataset_id}`)
     } catch (error) {
@@ -221,7 +289,6 @@ export default function ViewDataPage() {
       setCleaningInProgress(false)
     }
   }
-
   const formatCellValue = (value: unknown): string => {
     if (value === null || value === undefined) return "-"
     if (typeof value === "number") return value.toLocaleString()

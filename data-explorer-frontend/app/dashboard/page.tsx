@@ -1137,27 +1137,109 @@ function DashboardPageInner() {
     return () => { if (stageIntervalRef.current) clearInterval(stageIntervalRef.current) }
   }, [analysis.status])
 
-  const runAnalysis = useCallback(async (forceRefresh = false) => {
+  // const runAnalysis = useCallback(async (forceRefresh = false) => {
+  //   const storedData = localStorage.getItem("cleanedDataResult")
+  //   if (!storedData) {
+  //     setAnalysis({ status: "error", error: "No cleaned data found. Please clean your data first from the Data Explorer." })
+  //     return
+  //   }
+
+  //   let parsed: { cleaned_data: Record<string, unknown>[]; columns: string[]; cleaning_summary: unknown; factors_applied: string[] }
+  //   try {
+  //     parsed = JSON.parse(storedData)
+  //   } catch {
+  //     setAnalysis({ status: "error", error: "Failed to parse cleaned data from storage." })
+  //     return
+  //   }
+
+  //   if (!parsed.cleaned_data || parsed.cleaned_data.length === 0) {
+  //     setAnalysis({ status: "error", error: "Cleaned data is empty." })
+  //     return
+  //   }
+
+  //   // ── Return early if cache is valid and not forcing a refresh ──
+  //   if (!forceRefresh) {
+  //     const cached = readCache()
+  //     if (cached) {
+  //       setRawRows(cached.rows)
+  //       setAnalysis({ status: "success", data: cached.analysis })
+  //       return
+  //     }
+  //   }
+
+  //   // ── Cache miss or forced refresh — run the API call ──
+  //   setRawRows(parsed.cleaned_data)
+  //   const columns = parsed.columns.map((col: string) => ({ key: col, label: col.toUpperCase() }))
+  //   setAnalysis({ status: "loading", stage: LOADING_STAGES[0] })
+
+  //   try {
+  //     const response = await fetch("/api/analyze", {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({ columns, rows: parsed.cleaned_data, dataset_id: datasetId || "unknown" }),
+  //     })
+
+  //     if (!response.ok) {
+  //       const errorData = await response.json().catch(() => null)
+  //       throw new Error(errorData?.error || `Analysis failed: ${response.statusText}`)
+  //     }
+
+  //     const result: AnalysisResult = await response.json()
+
+  //     // ── Persist to cache ──
+  //     writeCache(result, parsed.cleaned_data, parsed.columns)
+
+  //     setAnalysis({ status: "success", data: result })
+  //   } catch (error) {
+  //     setAnalysis({ status: "error", error: error instanceof Error ? error.message : "Analysis failed. Please try again." })
+  //   }
+  // }, [datasetId])
+const runAnalysis = useCallback(async (forceRefresh = false) => {
+    let cleanedData: Record<string, unknown>[] = []
+    let columns: string[] = []
+
+    // --- Try localStorage first (small datasets) ---
     const storedData = localStorage.getItem("cleanedDataResult")
-    if (!storedData) {
-      setAnalysis({ status: "error", error: "No cleaned data found. Please clean your data first from the Data Explorer." })
+
+    if (storedData) {
+      try {
+        const parsed = JSON.parse(storedData)
+        cleanedData = parsed.cleaned_data || []
+        columns = parsed.columns || []
+      } catch {
+        setAnalysis({ status: "error", error: "Failed to parse cleaned data from storage." })
+        return
+      }
+    } else if (datasetId) {
+      // --- Large dataset — fetch from API ---
+      try {
+        const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+        const response = await fetch(`${API_BASE_URL}/data/${datasetId}`)
+        if (!response.ok) throw new Error("Failed to fetch dataset from API")
+        const result = await response.json()
+        cleanedData = result.rows || []
+        columns = result.columns?.map((c: { key: string }) => c.key) || []
+      } catch (error) {
+        setAnalysis({
+          status: "error",
+          error: error instanceof Error ? error.message : "Failed to load data for analysis.",
+        })
+        return
+      }
+    } else {
+      setAnalysis({
+        status: "error",
+        error: "No cleaned data found. Please clean your data first from the Data Explorer.",
+      })
       return
     }
 
-    let parsed: { cleaned_data: Record<string, unknown>[]; columns: string[]; cleaning_summary: unknown; factors_applied: string[] }
-    try {
-      parsed = JSON.parse(storedData)
-    } catch {
-      setAnalysis({ status: "error", error: "Failed to parse cleaned data from storage." })
-      return
-    }
-
-    if (!parsed.cleaned_data || parsed.cleaned_data.length === 0) {
+    if (!cleanedData || cleanedData.length === 0) {
       setAnalysis({ status: "error", error: "Cleaned data is empty." })
       return
     }
 
-    // ── Return early if cache is valid and not forcing a refresh ──
+    // --- Return early if cache is valid and not forcing a refresh ---
     if (!forceRefresh) {
       const cached = readCache()
       if (cached) {
@@ -1167,16 +1249,16 @@ function DashboardPageInner() {
       }
     }
 
-    // ── Cache miss or forced refresh — run the API call ──
-    setRawRows(parsed.cleaned_data)
-    const columns = parsed.columns.map((col: string) => ({ key: col, label: col.toUpperCase() }))
+    // --- Run analysis ---
+    setRawRows(cleanedData)
+    const columnObjects = columns.map((col: string) => ({ key: col, label: col.toUpperCase() }))
     setAnalysis({ status: "loading", stage: LOADING_STAGES[0] })
 
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ columns, rows: parsed.cleaned_data, dataset_id: datasetId || "unknown" }),
+        body: JSON.stringify({ columns: columnObjects, rows: cleanedData, dataset_id: datasetId || "unknown" }),
       })
 
       if (!response.ok) {
@@ -1185,16 +1267,15 @@ function DashboardPageInner() {
       }
 
       const result: AnalysisResult = await response.json()
-
-      // ── Persist to cache ──
-      writeCache(result, parsed.cleaned_data, parsed.columns)
-
+      writeCache(result, cleanedData, columns)
       setAnalysis({ status: "success", data: result })
     } catch (error) {
-      setAnalysis({ status: "error", error: error instanceof Error ? error.message : "Analysis failed. Please try again." })
+      setAnalysis({
+        status: "error",
+        error: error instanceof Error ? error.message : "Analysis failed. Please try again.",
+      })
     }
   }, [datasetId])
-
   const handleExportPDF = useCallback(async () => {
     if (analysis.status !== "success") return
     setIsExporting(true)

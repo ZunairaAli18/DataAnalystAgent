@@ -1,7 +1,6 @@
 import io
 from typing import Dict
-
-from fastapi import requests
+import requests
 from gotrue import Any, List
 import polars as pl
 from supabase import create_client, Client
@@ -441,7 +440,69 @@ class SupabaseDataEngine:
     }
        }
         
-        
+      
+    @staticmethod
+    def handle_sap(
+        host_url: str,
+        client_id: str,
+        username: str,
+        password: str,
+        entity: str = "SalesOrders"
+    ) -> pl.DataFrame:
+        import requests
+        from requests.auth import HTTPBasicAuth
+
+        url = f"{host_url.rstrip('/')}/sap/opu/odata/sap/{client_id}/{entity}"
+        headers = {
+            "Accept": "application/json",
+            "X-CSRF-Token": "Fetch"
+        }
+
+        session = requests.Session()
+        session.auth = HTTPBasicAuth(username, password)
+
+        token_response = session.get(url, headers=headers, params={"$top": "1"})
+        csrf_token = token_response.headers.get("X-CSRF-Token", "")
+
+        all_records = []
+        skip = 0
+        top = 1000
+
+        while True:
+            params = {
+                "$format": "json",
+                "$top": top,
+                "$skip": skip,
+            }
+            response = session.get(url, headers={
+                **headers,
+                "X-CSRF-Token": csrf_token
+            }, params=params)
+
+            response.raise_for_status()
+            data = response.json()
+
+            records = data.get("d", {}).get("results", [])
+            if not records:
+                break
+
+            cleaned = [
+                {k: v for k, v in record.items() if k != "__metadata"}
+                for record in records
+            ]
+            all_records.extend(cleaned)
+
+            if len(records) < top:
+                break
+
+            skip += top
+
+        if not all_records:
+            raise ValueError(f"No data returned from SAP entity: {entity}")
+
+        return pl.DataFrame(all_records, infer_schema_length=1000)
+
+  
     @classmethod
     def process_and_upload(cls, df: pl.DataFrame, dataset_id: str):
         """Converts DataFrame to bytes and uploads via Supabase SDK"""
@@ -479,15 +540,149 @@ class SupabaseDataEngine:
         # Requires: pip install connectorx
         return pl.read_database_uri(query=query, uri=connection_uri)
 
+    # @classmethod
+    # def handle_shopify(cls, shop_url: str, token: str, resource: str = "orders"):
+    #     """Fetches data from Shopify REST API and flattens it"""
+    #     url = f"https://{shop_url}/admin/api/2024-01/{resource}.json"
+    #     headers = {"X-Shopify-Access-Token": token}
+        
+    #     response = requests.get(url, headers=headers)
+    #     response.raise_for_status()
+    #     data = response.json().get(resource, [])
+        
+    #     # Shopify JSON can be nested; Polars is great at normalizing this
+    #     return pl.from_dicts(data)
     @classmethod
-    def handle_shopify(cls, shop_url: str, token: str, resource: str = "orders"):
-        """Fetches data from Shopify REST API and flattens it"""
-        url = f"https://{shop_url}/admin/api/2024-01/{resource}.json"
-        headers = {"X-Shopify-Access-Token": token}
-        
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json().get(resource, [])
-        
-        # Shopify JSON can be nested; Polars is great at normalizing this
-        return pl.from_dicts(data)
+    def handle_shopify(cls, shop_url: str, token: str, resource: str = "orders") -> pl.DataFrame:
+        shop_url = shop_url.replace("https://", "").replace("http://", "").rstrip("/")
+        headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+        all_records = []
+        url = f"https://{shop_url}/admin/api/2024-01/{resource}.json?limit=250"
+
+        while url:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+
+            data = response.json().get(resource, [])
+            all_records.extend(data)
+
+            # Pagination via Link header
+            link_header = response.headers.get("Link", "")
+            next_url = None
+            if 'rel="next"' in link_header:
+                for part in link_header.split(","):
+                    if 'rel="next"' in part:
+                        next_url = part.split(";")[0].strip().strip("<>")
+                        break
+            url = next_url
+
+        if not all_records:
+            raise ValueError(f"No data returned from Shopify resource: {resource}")
+
+        # Flatten nested fields
+        flattened = []
+        for record in all_records:
+            flat = {}
+            for k, v in record.items():
+                if isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else ""
+                elif isinstance(v, list):
+                    flat[k] = str(len(v))
+                else:
+                    flat[k] = str(v) if v is not None else ""
+            flattened.append(flat)
+
+        return pl.DataFrame(flattened, infer_schema_length=1000)
+    
+    @staticmethod
+    def handle_google_sheets(
+        spreadsheet_id: str,
+        sheet_name: str,
+        service_account_json: str
+    ) -> pl.DataFrame:
+        import gspread
+        import json
+        import polars as pl
+        from google.oauth2.service_account import Credentials
+ 
+        # Scopes
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly"
+        ]
+ 
+        # Load credentials
+        creds_dict = json.loads(service_account_json)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+ 
+        print("✅ Auth successful")
+ 
+        # Open sheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        print("✅ Spreadsheet opened")
+ 
+        worksheet = spreadsheet.worksheet(sheet_name)
+        print("✅ Worksheet accessed")
+ 
+        # Fetch limited range (prevents hanging)
+        try:
+            data = worksheet.get("A1:Z500")  # adjust range if needed
+        except Exception as e:
+            raise RuntimeError(f"Error fetching data from Google Sheets: {str(e)}")
+ 
+        if not data or len(data) < 2:
+            raise ValueError(f"No usable data found in sheet: {sheet_name}")
+ 
+        print("✅ Data fetched from sheet")
+ 
+        # Convert to records
+        headers = data[0]
+        rows = data[1:]
+ 
+        records = []
+        for row in rows:
+            # Ensure row length matches headers
+            row += [""] * (len(headers) - len(row))
+            records.append(dict(zip(headers, row)))
+ 
+        print(f"✅ Processed {len(records)} rows")
+ 
+        # Convert to Polars DataFrame
+        df = pl.DataFrame(records)
+ 
+        return df
+    
+    
+    @staticmethod
+    def handle_quickbooks(client_id: str, client_secret: str, realm_id: str) -> pl.DataFrame:
+        """
+        Fetches QuickBooks Online data via OAuth2 Client Credentials.
+        Currently retrieves basic company info as a placeholder.
+        """
+        # Step 1: Get OAuth2 token
+        token_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+        auth = (client_id, client_secret)
+        headers = {"Accept": "application/json"}
+        data = {"grant_type": "client_credentials"}
+
+        resp = requests.post(token_url, auth=auth, data=data, headers=headers)
+        resp.raise_for_status()
+        access_token = resp.json().get("access_token")
+        if not access_token:
+            raise ValueError("Failed to obtain QuickBooks access token")
+
+        # Step 2: Query a sample QuickBooks endpoint
+        url = f"https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/companyinfo/{realm_id}"
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+
+        data = resp.json().get("CompanyInfo", {})
+        if not data:
+            raise ValueError("No data returned from QuickBooks")
+
+        # Flatten into a list of dicts (Polars expects a list of dicts)
+        return pl.DataFrame([data])
