@@ -1585,3 +1585,264 @@ async def analyze_cleaned_data(request: AnalyzeRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+@app.post("/ingest/upload-pdfs")
+async def upload_multiple_pdfs(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Ingest multiple PDFs. Validates that all PDFs are related (share overlapping
+    columns/categories) before merging them into a single dataset.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided.")
+
+    # Validate all files are PDFs
+    for f in files:
+        if not f.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=400,
+                detail=f'"{f.filename}" is not a PDF. This endpoint only accepts PDF files.'
+            )
+
+    # ── Read all file contents upfront (before async context closes) ──
+    file_contents = []
+    for f in files:
+        content = await f.read()
+        file_contents.append((f.filename, content))
+
+    # ── Parse each PDF into a DataFrame using your existing logic ──
+    import pdfplumber
+    import re
+
+    def parse_single_pdf(filename: str, content: bytes) -> pl.DataFrame:
+        all_table_rows = []
+        all_text_chunks = []
+
+        with pdfplumber.open(BytesIO(content)) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                tables = page.extract_tables()
+                full_text = page.extract_text() or ""
+
+                if tables:
+                    for table in tables:
+                        if not table or len(table) < 2:
+                            continue
+                        raw_headers = table[0]
+                        headers = [
+                            str(h).strip().replace(" ", "_").lower() if h else f"col_{i}"
+                            for i, h in enumerate(raw_headers)
+                        ]
+                        seen = {}
+                        deduped = []
+                        for h in headers:
+                            if h in seen:
+                                seen[h] += 1
+                                deduped.append(f"{h}_{seen[h]}")
+                            else:
+                                seen[h] = 0
+                                deduped.append(h)
+                        headers = deduped
+
+                        for row in table[1:]:
+                            if not any(cell for cell in row if cell):
+                                continue
+                            row_dict = {
+                                headers[i]: (str(v).strip() if v else "")
+                                for i, v in enumerate(row)
+                                if i < len(headers)
+                            }
+                            row_dict["_page"] = page_num
+                            row_dict["_source"] = "table"
+                            row_dict["_filename"] = filename
+                            all_table_rows.append(row_dict)
+
+                if full_text:
+                    current_section = "general"
+                    paragraph_buffer = []
+
+                    for line in full_text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            if paragraph_buffer:
+                                paragraph_text = " ".join(paragraph_buffer)
+                                all_text_chunks.append({
+                                    "section": current_section,
+                                    "type": "paragraph",
+                                    "content": paragraph_text,
+                                    "_page": page_num,
+                                    "_source": "text",
+                                    "_filename": filename,
+                                    "_char_count": len(paragraph_text),
+                                })
+                                paragraph_buffer = []
+                            continue
+
+                        is_heading = (
+                            re.match(r'^[A-Z][A-Z\s]{4,}$', line) or
+                            (len(line) < 60 and re.match(r'^[A-Z][a-z]', line) and line.endswith(':')) or
+                            re.match(r'^\d+\.\s+[A-Z]', line)
+                        )
+
+                        if is_heading and not paragraph_buffer:
+                            current_section = re.sub(r'^\d+\.\s+', '', line).lower().strip().replace(" ", "_")
+                            all_text_chunks.append({
+                                "section": current_section,
+                                "type": "heading",
+                                "content": line,
+                                "_page": page_num,
+                                "_source": "text",
+                                "_filename": filename,
+                                "_char_count": len(line),
+                            })
+                        else:
+                            paragraph_buffer.append(line)
+
+                    if paragraph_buffer:
+                        paragraph_text = " ".join(paragraph_buffer)
+                        all_text_chunks.append({
+                            "section": current_section,
+                            "type": "paragraph",
+                            "content": paragraph_text,
+                            "_page": page_num,
+                            "_source": "text",
+                            "_filename": filename,
+                            "_char_count": len(paragraph_text),
+                        })
+
+        if len(all_table_rows) > len(all_text_chunks):
+            rows = all_table_rows
+        elif all_text_chunks and not all_table_rows:
+            rows = all_text_chunks
+        else:
+            rows = all_table_rows if all_table_rows else all_text_chunks
+
+        if not rows:
+            raise ValueError(f"No extractable content found in: {filename}")
+
+        all_keys = list(dict.fromkeys(k for row in rows for k in row))
+        normalized = [{k: row.get(k, "") for k in all_keys} for row in rows]
+        return pl.DataFrame(normalized)
+
+    # ── Parse all PDFs and collect their column sets ──
+    parsed_frames: List[tuple[str, pl.DataFrame]] = []
+    parse_errors = []
+
+    for filename, content in file_contents:
+        try:
+            df = parse_single_pdf(filename, content)
+            parsed_frames.append((filename, df))
+        except Exception as e:
+            parse_errors.append(f'"{filename}": {str(e)}')
+
+    if parse_errors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to parse some PDFs: {'; '.join(parse_errors)}"
+        )
+
+    # ── Relatedness check ──
+    # Strip internal meta columns before comparing
+    META_COLS = {"_page", "_source", "_filename", "_char_count", "section", "type"}
+
+    def get_content_cols(df: pl.DataFrame) -> set:
+        return {c for c in df.columns if c not in META_COLS}
+
+    col_sets = [(fname, get_content_cols(df)) for fname, df in parsed_frames]
+
+    if len(col_sets) > 1:
+        # Calculate pairwise Jaccard similarity between all PDFs
+        # A pair is "unrelated" if their overlap is below the threshold
+        SIMILARITY_THRESHOLD = 0.3  # 30% column overlap required
+
+        unrelated_pairs = []
+        for i in range(len(col_sets)):
+            for j in range(i + 1, len(col_sets)):
+                fname_a, cols_a = col_sets[i]
+                fname_b, cols_b = col_sets[j]
+
+                if not cols_a or not cols_b:
+                    continue
+
+                intersection = cols_a & cols_b
+                union = cols_a | cols_b
+                jaccard = len(intersection) / len(union) if union else 0
+
+                if jaccard < SIMILARITY_THRESHOLD:
+                    unrelated_pairs.append({
+                        "file_a": fname_a,
+                        "file_b": fname_b,
+                        "overlap_columns": sorted(intersection),
+                        "similarity_score": round(jaccard, 2),
+                        "columns_a": sorted(cols_a),
+                        "columns_b": sorted(cols_b),
+                    })
+
+        if unrelated_pairs:
+            # Build a clear error message
+            pair_descriptions = []
+            for p in unrelated_pairs[:3]:  # Show up to 3 problem pairs
+                pair_descriptions.append(
+                    f'"{p["file_a"]}" and "{p["file_b"]}" share only '
+                    f'{len(p["overlap_columns"])} column(s) '
+                    f'(similarity: {p["similarity_score"] * 100:.0f}%)'
+                )
+
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "unrelated_files",
+                    "message": (
+                        "The uploaded PDFs do not appear to be related. "
+                        "Please upload PDFs of the same type (e.g., all invoices, all reports)."
+                    ),
+                    "problematic_pairs": unrelated_pairs,
+                    "hint": f"Problems found: {'; '.join(pair_descriptions)}",
+                }
+            )
+
+    # ── Merge all DataFrames ──
+    def merge_pdfs() -> pl.DataFrame:
+        # Collect all unique columns across all frames
+        all_columns = list(dict.fromkeys(
+            col for _, df in parsed_frames for col in df.columns
+        ))
+
+        aligned_frames = []
+        for _, df in parsed_frames:
+            missing = [c for c in all_columns if c not in df.columns]
+            if missing:
+                # Add missing columns as empty strings
+                df = df.with_columns([
+                    pl.lit("").alias(c) for c in missing
+                ])
+            aligned_frames.append(df.select(all_columns))
+
+        return pl.concat(aligned_frames)
+
+    # ── Create dataset record and kick off background processing ──
+    dataset_id = str(uuid.uuid4())
+    filenames_str = ", ".join(fname for fname, _ in file_contents)
+    display_name = (
+        filenames_str if len(filenames_str) <= 80
+        else f"{len(file_contents)} PDFs"
+    )
+
+    new_ds = Dataset(
+        id=dataset_id,
+        name=display_name,
+        source_type="multi_pdf",
+        status="processing"
+    )
+    db.add(new_ds)
+    db.commit()
+
+    background_tasks.add_task(background_processing, dataset_id, merge_pdfs, db)
+
+    return {
+        "dataset_id": dataset_id,
+        "message": f"{len(file_contents)} PDF(s) validated and upload started.",
+        "files_accepted": [fname for fname, _ in file_contents],
+    }

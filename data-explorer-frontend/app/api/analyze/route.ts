@@ -225,6 +225,289 @@ function buildColumnProfiles(
 
 /* ── Build rich data summary for AI ── */
 
+// function buildDataSummary(
+//   columns: ColumnMeta[],
+//   rows: CleanedRow[],
+//   numericCols: string[],
+//   categoricalCols: string[],
+//   dateCols: string[],
+//   boolCols: string[],
+//   columnProfiles: ColumnProfile[]
+// ): string {
+//   const lines: string[] = []
+//   const n = rows.length
+
+//   // 1. DATASET OVERVIEW
+//   lines.push("=== SECTION 1: DATASET OVERVIEW ===")
+//   lines.push(`Total records: ${n}`)
+//   lines.push(`Total columns: ${columns.length}`)
+//   lines.push(`Numeric columns (${numericCols.length}): ${numericCols.join(", ") || "none"}`)
+//   lines.push(`Categorical columns (${categoricalCols.length}): ${categoricalCols.join(", ") || "none"}`)
+//   lines.push(`Date columns (${dateCols.length}): ${dateCols.join(", ") || "none"}`)
+//   lines.push(`Boolean columns (${boolCols.length}): ${boolCols.join(", ") || "none"}`)
+//   const totalCells = n * columns.length
+//   const totalNulls = columnProfiles.reduce((s, p) => s + p.null_count, 0)
+//   lines.push(`Overall null rate: ${((totalNulls / totalCells) * 100).toFixed(2)}% (${totalNulls} of ${totalCells} cells)`)
+
+//   // 2. COLUMN PROFILES
+//   lines.push("\n=== SECTION 2: COLUMN PROFILES ===")
+//   for (const profile of columnProfiles) {
+//     lines.push(`\n[${profile.key}] dtype=${profile.dtype}`)
+//     lines.push(`  null_count=${profile.null_count} (${((profile.null_count / n) * 100).toFixed(1)}%)  distinct=${profile.distinct_count}  completeness=${(((n - profile.null_count) / n) * 100).toFixed(1)}%`)
+
+//     if (profile.stats) {
+//       const s = profile.stats
+//       lines.push(`  min=${s.min}  max=${s.max}  range=${Math.round((s.max - s.min) * 100) / 100}`)
+//       lines.push(`  mean=${s.mean.toFixed(4)}  median=${s.median}  sum=${s.sum.toLocaleString()}`)
+
+//       const numVals = rows.map((r) => Number(r[profile.key])).filter((v) => !isNaN(v))
+//       if (numVals.length > 1) {
+//         const variance = numVals.reduce((acc, v) => acc + (v - s.mean) ** 2, 0) / numVals.length
+//         const stddev = Math.sqrt(variance)
+//         const skewness = stddev > 0 ? (3 * (s.mean - s.median)) / stddev : 0
+//         const skewLabel = skewness > 1 ? "strongly right-skewed" : skewness > 0.5 ? "moderately right-skewed" : skewness < -1 ? "strongly left-skewed" : skewness < -0.5 ? "moderately left-skewed" : "roughly symmetric"
+//         lines.push(`  stddev=${stddev.toFixed(4)}  skewness=${skewness.toFixed(3)} (${skewLabel})  cv=${s.mean !== 0 ? ((stddev / Math.abs(s.mean)) * 100).toFixed(1) + "%" : "N/A"}`)
+
+//         const sorted = [...numVals].sort((a, b) => a - b)
+//         const q1 = sorted[Math.floor(sorted.length * 0.25)]
+//         const q3 = sorted[Math.floor(sorted.length * 0.75)]
+//         const iqr = q3 - q1
+//         const lowerFence = q1 - 1.5 * iqr
+//         const upperFence = q3 + 1.5 * iqr
+//         const outliers = numVals.filter((v) => v < lowerFence || v > upperFence)
+//         lines.push(`  Q1=${q1}  Q3=${q3}  IQR=${Math.round(iqr * 100) / 100}  outliers=${outliers.length} (${((outliers.length / numVals.length) * 100).toFixed(1)}%)`)
+//         if (outliers.length > 0) {
+//           const topOutliers = [...outliers].sort((a, b) => Math.abs(b - s.mean) - Math.abs(a - s.mean)).slice(0, 5)
+//           lines.push(`  top_outlier_values: ${topOutliers.join(", ")}`)
+//         }
+
+//         const p10 = sorted[Math.floor(sorted.length * 0.10)]
+//         const p90 = sorted[Math.floor(sorted.length * 0.90)]
+//         const p99 = sorted[Math.floor(sorted.length * 0.99)]
+//         lines.push(`  percentiles: p10=${p10}  p25=${q1}  p50=${sorted[Math.floor(sorted.length * 0.50)]}  p75=${q3}  p90=${p90}  p99=${p99}`)
+
+//         const aboveMean = numVals.filter((v) => v > s.mean).length
+//         lines.push(`  above_mean=${aboveMean} (${((aboveMean / numVals.length) * 100).toFixed(1)}%)  below_mean=${numVals.length - aboveMean} (${(((numVals.length - aboveMean) / numVals.length) * 100).toFixed(1)}%)`)
+
+//         const zeros = numVals.filter((v) => v === 0).length
+//         const negatives = numVals.filter((v) => v < 0).length
+//         if (zeros > 0 || negatives > 0) {
+//           lines.push(`  zeros=${zeros} (${((zeros / numVals.length) * 100).toFixed(1)}%)  negatives=${negatives} (${((negatives / numVals.length) * 100).toFixed(1)}%)`)
+//         }
+//       }
+//     }
+
+//     if (profile.top_values.length > 0) {
+//       lines.push(`  top_values:`)
+//       profile.top_values.slice(0, 5).forEach((tv) => {
+//         lines.push(`    "${tv.value}": ${tv.count} records (${tv.percentage}%)`)
+//       })
+//       const top1 = profile.top_values[0]?.percentage ?? 0
+//       const top3 = profile.top_values.slice(0, 3).reduce((s, v) => s + v.percentage, 0)
+//       const top5 = profile.top_values.slice(0, 5).reduce((s, v) => s + v.percentage, 0)
+//       lines.push(`  concentration: top1=${top1}%  top3=${top3.toFixed(1)}%  top5=${top5.toFixed(1)}%`)
+
+//       const totalNonNull = n - profile.null_count
+//       if (totalNonNull > 0) {
+//         const entropy = profile.top_values.reduce((e, tv) => {
+//           const p = tv.count / totalNonNull
+//           return e - (p > 0 ? p * Math.log2(p) : 0)
+//         }, 0)
+//         const maxEntropy = Math.log2(Math.min(profile.distinct_count, profile.top_values.length))
+//         const normalizedEntropy = maxEntropy > 0 ? entropy / maxEntropy : 0
+//         lines.push(`  diversity: entropy=${entropy.toFixed(3)}  normalized=${normalizedEntropy.toFixed(3)} (${normalizedEntropy > 0.8 ? "very diverse" : normalizedEntropy > 0.5 ? "moderately diverse" : "concentrated"})`)
+//       }
+//     }
+//   }
+
+//   // 3. CATEGORY x METRIC BREAKDOWNS
+//   if (categoricalCols.length > 0 && numericCols.length > 0) {
+//     lines.push("\n=== SECTION 3: CATEGORY x METRIC BREAKDOWNS ===")
+//     for (const catCol of categoricalCols.slice(0, 2)) {
+//       for (const numCol of numericCols.slice(0, 2)) {
+//         const grouped: Record<string, number[]> = {}
+//         rows.forEach((row) => {
+//           const key = String(row[catCol] ?? "Unknown")
+//           if (!grouped[key]) grouped[key] = []
+//           const val = Number(row[numCol])
+//           if (!isNaN(val)) grouped[key].push(val)
+//         })
+
+//         const stats = Object.entries(grouped).map(([cat, vals]) => {
+//           const sum = vals.reduce((a, b) => a + b, 0)
+//           const mean = vals.length > 0 ? sum / vals.length : 0
+//           const sorted = [...vals].sort((a, b) => a - b)
+//           const median = sorted.length > 0
+//             ? sorted.length % 2 === 0
+//               ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+//               : sorted[Math.floor(sorted.length / 2)]
+//             : 0
+//           return { cat, count: vals.length, sum, mean, median }
+//         }).sort((a, b) => b.sum - a.sum)
+
+//         const totalSum = stats.reduce((s, r) => s + r.sum, 0)
+//         lines.push(`\n${numCol} BY ${catCol} (sorted by sum):`)
+//         lines.push(`  total_sum=${Math.round(totalSum * 100) / 100}  categories=${stats.length}`)
+//         stats.slice(0, 6).forEach((s) => {
+//           const pct = totalSum > 0 ? ((s.sum / totalSum) * 100).toFixed(1) : "0"
+//           lines.push(`  "${s.cat}": sum=${Math.round(s.sum * 100) / 100}  pct=${pct}%  count=${s.count}  mean=${s.mean.toFixed(2)}  median=${s.median}`)
+//         })
+//         if (stats.length >= 2) {
+//           const top = stats[0], bottom = stats[stats.length - 1]
+//           const ratio = bottom.sum !== 0 ? (top.sum / bottom.sum).toFixed(1) : "inf"
+//           lines.push(`  TOP vs BOTTOM: "${top.cat}" (${Math.round(top.sum * 100) / 100}) is ${ratio}x "${bottom.cat}" (${Math.round(bottom.sum * 100) / 100})`)
+//         }
+//       }
+//     }
+//   }
+
+//   // 4. TIME SERIES ANALYSIS
+//   if (dateCols.length > 0 && numericCols.length > 0) {
+//     lines.push("\n=== SECTION 4: TIME SERIES ANALYSIS ===")
+//     for (const dateCol of dateCols.slice(0, 2)) {
+//       for (const numCol of numericCols.slice(0, 3)) {
+//         const monthly: Record<string, number[]> = {}
+//         rows.forEach((row) => {
+//           const dateVal = String(row[dateCol] ?? "")
+//           const key = dateVal.substring(0, 7)
+//           if (!key || key.length < 7) return
+//           if (!monthly[key]) monthly[key] = []
+//           const val = Number(row[numCol])
+//           if (!isNaN(val)) monthly[key].push(val)
+//         })
+
+//         const sortedMonths = Object.keys(monthly).sort()
+//         if (sortedMonths.length < 2) continue
+
+//         const monthlyStats = sortedMonths.map((m) => {
+//           const vals = monthly[m]
+//           const sum = vals.reduce((a, b) => a + b, 0)
+//           return { month: m, sum, count: vals.length, mean: sum / vals.length }
+//         })
+
+//         lines.push(`\n${numCol} OVER TIME (${dateCol}):`)
+//         lines.push(`  range: ${sortedMonths[0]} to ${sortedMonths[sortedMonths.length - 1]}  periods=${sortedMonths.length}`)
+//         monthlyStats.forEach((m) => {
+//           lines.push(`  ${m.month}: sum=${Math.round(m.sum * 100) / 100}  count=${m.count}  mean=${m.mean.toFixed(2)}`)
+//         })
+
+//         if (monthlyStats.length >= 2) {
+//           lines.push(`  MOM GROWTH RATES:`)
+//           const growthRates: number[] = []
+//           for (let i = 1; i < monthlyStats.length; i++) {
+//             const prev = monthlyStats[i - 1].sum
+//             const curr = monthlyStats[i].sum
+//             const growth = prev !== 0 ? ((curr - prev) / Math.abs(prev)) * 100 : 0
+//             growthRates.push(growth)
+//             lines.push(`  ${monthlyStats[i].month}: ${growth >= 0 ? "+" : ""}${growth.toFixed(1)}%`)
+//           }
+//           const avgGrowth = growthRates.reduce((a, b) => a + b, 0) / growthRates.length
+//           const positiveMonths = growthRates.filter((g) => g > 0).length
+//           lines.push(`  avg_mom_growth=${avgGrowth.toFixed(2)}%  positive_months=${positiveMonths}/${growthRates.length}  best=${Math.max(...growthRates).toFixed(1)}%  worst=${Math.min(...growthRates).toFixed(1)}%`)
+
+//           const half = Math.floor(monthlyStats.length / 2)
+//           const firstHalfAvg = monthlyStats.slice(0, half).reduce((s, m) => s + m.sum, 0) / half
+//           const secondHalfAvg = monthlyStats.slice(half).reduce((s, m) => s + m.sum, 0) / (monthlyStats.length - half)
+//           const overallTrend = firstHalfAvg > 0 ? ((secondHalfAvg - firstHalfAvg) / firstHalfAvg * 100).toFixed(1) : "N/A"
+//           lines.push(`  overall_trend: first_half_avg=${firstHalfAvg.toFixed(2)} -> second_half_avg=${secondHalfAvg.toFixed(2)} (${overallTrend}% change)`)
+
+//           const peak = monthlyStats.reduce((a, b) => b.sum > a.sum ? b : a)
+//           const trough = monthlyStats.reduce((a, b) => b.sum < a.sum ? b : a)
+//           lines.push(`  peak=${peak.month} (${Math.round(peak.sum * 100) / 100})  trough=${trough.month} (${Math.round(trough.sum * 100) / 100})`)
+//         }
+
+//         const yearlyTotals: Record<string, number> = {}
+//         monthlyStats.forEach((m) => {
+//           const year = m.month.substring(0, 4)
+//           yearlyTotals[year] = (yearlyTotals[year] || 0) + m.sum
+//         })
+//         const years = Object.keys(yearlyTotals).sort()
+//         if (years.length >= 2) {
+//           lines.push(`  YEARLY: ${years.map((y) => `${y}=${Math.round(yearlyTotals[y] * 100) / 100}`).join("  ")}`)
+//           const yoy = ((yearlyTotals[years[years.length - 1]] - yearlyTotals[years[years.length - 2]]) / Math.abs(yearlyTotals[years[years.length - 2]]) * 100)
+//           lines.push(`  latest_yoy_growth=${yoy.toFixed(1)}%`)
+//         }
+//       }
+//     }
+//   }
+
+//   // 5. CORRELATIONS
+//   if (numericCols.length >= 2) {
+//     lines.push("\n=== SECTION 5: NUMERIC CORRELATIONS (Pearson r) ===")
+//     const pairs = []
+//     for (let i = 0; i < Math.min(numericCols.length, 6); i++) {
+//       for (let j = i + 1; j < Math.min(numericCols.length, 6); j++) {
+//         const colA = numericCols[i]
+//         const colB = numericCols[j]
+//         const valsA = rows.map((r) => Number(r[colA])).filter((v) => !isNaN(v))
+//         const valsB = rows.map((r) => Number(r[colB])).filter((v) => !isNaN(v))
+//         const len = Math.min(valsA.length, valsB.length)
+//         if (len < 5) continue
+//         const meanA = valsA.slice(0, len).reduce((a, b) => a + b, 0) / len
+//         const meanB = valsB.slice(0, len).reduce((a, b) => a + b, 0) / len
+//         let num = 0, denomA = 0, denomB = 0
+//         for (let k = 0; k < len; k++) {
+//           const da = valsA[k] - meanA, db = valsB[k] - meanB
+//           num += da * db; denomA += da * da; denomB += db * db
+//         }
+//         const r = denomA > 0 && denomB > 0 ? num / Math.sqrt(denomA * denomB) : 0
+//         const strength = Math.abs(r) > 0.7 ? "strong" : Math.abs(r) > 0.4 ? "moderate" : Math.abs(r) > 0.2 ? "weak" : "negligible"
+//         pairs.push({ colA, colB, r: Math.round(r * 1000) / 1000, strength, direction: r > 0 ? "positive" : "negative" })
+//       }
+//     }
+//     pairs.sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
+//     pairs.forEach((p) => lines.push(`  ${p.colA} <-> ${p.colB}: r=${p.r} (${p.strength} ${p.direction})`))
+//     if (pairs.length === 0) lines.push("  Not enough numeric columns for correlation.")
+//   }
+
+//   // 6. BOOLEAN SEGMENT COMPARISONS
+//   if (boolCols.length > 0 && numericCols.length > 0) {
+//     lines.push("\n=== SECTION 6: BOOLEAN SEGMENT COMPARISONS ===")
+//     for (const boolCol of boolCols.slice(0, 3)) {
+//       for (const numCol of numericCols.slice(0, 3)) {
+//         const groups: Record<string, number[]> = {}
+//         rows.forEach((row) => {
+//           const key = String(row[boolCol] ?? "unknown").toLowerCase()
+//           if (!groups[key]) groups[key] = []
+//           const val = Number(row[numCol])
+//           if (!isNaN(val)) groups[key].push(val)
+//         })
+//         lines.push(`\n${numCol} BY ${boolCol}:`)
+//         Object.entries(groups).forEach(([seg, vals]) => {
+//           const sum = vals.reduce((a, b) => a + b, 0)
+//           lines.push(`  ${seg}: count=${vals.length} (${((vals.length / n) * 100).toFixed(1)}%)  sum=${Math.round(sum * 100) / 100}  mean=${(sum / vals.length).toFixed(2)}`)
+//         })
+//       }
+//     }
+//   }
+
+//   // 7. DATA QUALITY SIGNALS
+//   lines.push("\n=== SECTION 7: DATA QUALITY SIGNALS ===")
+//   columnProfiles.forEach((p) => {
+//     const nullPct = (p.null_count / n) * 100
+//     if (nullPct > 50) lines.push(`  HIGH NULL: "${p.key}" has ${nullPct.toFixed(1)}% nulls`)
+//     else if (nullPct > 20) lines.push(`  MODERATE NULL: "${p.key}" has ${nullPct.toFixed(1)}% nulls`)
+//     if (p.dtype === "categorical" && p.distinct_count === n) lines.push(`  UNIQUE IDs: "${p.key}" is likely an ID column`)
+//     if (p.dtype === "categorical" && p.distinct_count === 1) lines.push(`  CONSTANT: "${p.key}" has only 1 unique value`)
+//     if (p.dtype === "numeric" && p.stats) {
+//       const numVals = rows.map((r) => Number(r[p.key])).filter((v) => !isNaN(v))
+//       const variance = numVals.reduce((acc, v) => acc + (v - p.stats!.mean) ** 2, 0) / numVals.length
+//       const stddev = Math.sqrt(variance)
+//       const cv = p.stats.mean !== 0 ? stddev / Math.abs(p.stats.mean) : 0
+//       if (cv > 2) lines.push(`  HIGH VARIABILITY: "${p.key}" CV=${(cv * 100).toFixed(0)}%`)
+//     }
+//   })
+
+//   // 8. SAMPLE DATA — limited to 5 rows x 8 cols to save tokens
+//   lines.push("\n=== SECTION 8: SAMPLE DATA (first 5 rows) ===")
+//   const sampleCols = columns.slice(0, 8).map((c) => c.key)
+//   lines.push(sampleCols.join(" | "))
+//   rows.slice(0, 5).forEach((row) => {
+//     lines.push(sampleCols.map((c) => String(row[c] ?? "").substring(0, 20)).join(" | "))
+//   })
+
+//   return lines.join("\n")
+// }
 function buildDataSummary(
   columns: ColumnMeta[],
   rows: CleanedRow[],
@@ -237,210 +520,120 @@ function buildDataSummary(
   const lines: string[] = []
   const n = rows.length
 
-  // 1. DATASET OVERVIEW
-  lines.push("=== SECTION 1: DATASET OVERVIEW ===")
-  lines.push(`Total records: ${n}`)
-  lines.push(`Total columns: ${columns.length}`)
-  lines.push(`Numeric columns (${numericCols.length}): ${numericCols.join(", ") || "none"}`)
-  lines.push(`Categorical columns (${categoricalCols.length}): ${categoricalCols.join(", ") || "none"}`)
-  lines.push(`Date columns (${dateCols.length}): ${dateCols.join(", ") || "none"}`)
-  lines.push(`Boolean columns (${boolCols.length}): ${boolCols.join(", ") || "none"}`)
-  const totalCells = n * columns.length
-  const totalNulls = columnProfiles.reduce((s, p) => s + p.null_count, 0)
-  lines.push(`Overall null rate: ${((totalNulls / totalCells) * 100).toFixed(2)}% (${totalNulls} of ${totalCells} cells)`)
+  // ── Cap rows used for aggregation to avoid O(n) blowup on large datasets
+  const SAMPLE_ROWS = rows.slice(0, 500)
 
-  // 2. COLUMN PROFILES
-  lines.push("\n=== SECTION 2: COLUMN PROFILES ===")
+  // SECTION 1: OVERVIEW
+  lines.push("=== DATASET OVERVIEW ===")
+  lines.push(`rows=${n}  columns=${columns.length}`)
+  lines.push(`numeric: ${numericCols.join(", ") || "none"}`)
+  lines.push(`categorical: ${categoricalCols.join(", ") || "none"}`)
+  lines.push(`date: ${dateCols.join(", ") || "none"}`)
+  lines.push(`boolean: ${boolCols.join(", ") || "none"}`)
+  const totalNulls = columnProfiles.reduce((s, p) => s + p.null_count, 0)
+  const totalCells = n * columns.length
+  lines.push(`null_rate=${((totalNulls / totalCells) * 100).toFixed(1)}%`)
+
+  // SECTION 2: COLUMN PROFILES — essentials only, no full outlier lists
+  lines.push("\n=== COLUMN PROFILES ===")
   for (const profile of columnProfiles) {
-    lines.push(`\n[${profile.key}] dtype=${profile.dtype}`)
-    lines.push(`  null_count=${profile.null_count} (${((profile.null_count / n) * 100).toFixed(1)}%)  distinct=${profile.distinct_count}  completeness=${(((n - profile.null_count) / n) * 100).toFixed(1)}%`)
+    const nullPct = ((profile.null_count / n) * 100).toFixed(1)
+    lines.push(`\n[${profile.key}] dtype=${profile.dtype}  nulls=${nullPct}%  distinct=${profile.distinct_count}`)
 
     if (profile.stats) {
       const s = profile.stats
-      lines.push(`  min=${s.min}  max=${s.max}  range=${Math.round((s.max - s.min) * 100) / 100}`)
-      lines.push(`  mean=${s.mean.toFixed(4)}  median=${s.median}  sum=${s.sum.toLocaleString()}`)
-
-      const numVals = rows.map((r) => Number(r[profile.key])).filter((v) => !isNaN(v))
-      if (numVals.length > 1) {
-        const variance = numVals.reduce((acc, v) => acc + (v - s.mean) ** 2, 0) / numVals.length
-        const stddev = Math.sqrt(variance)
-        const skewness = stddev > 0 ? (3 * (s.mean - s.median)) / stddev : 0
-        const skewLabel = skewness > 1 ? "strongly right-skewed" : skewness > 0.5 ? "moderately right-skewed" : skewness < -1 ? "strongly left-skewed" : skewness < -0.5 ? "moderately left-skewed" : "roughly symmetric"
-        lines.push(`  stddev=${stddev.toFixed(4)}  skewness=${skewness.toFixed(3)} (${skewLabel})  cv=${s.mean !== 0 ? ((stddev / Math.abs(s.mean)) * 100).toFixed(1) + "%" : "N/A"}`)
-
-        const sorted = [...numVals].sort((a, b) => a - b)
-        const q1 = sorted[Math.floor(sorted.length * 0.25)]
-        const q3 = sorted[Math.floor(sorted.length * 0.75)]
-        const iqr = q3 - q1
-        const lowerFence = q1 - 1.5 * iqr
-        const upperFence = q3 + 1.5 * iqr
-        const outliers = numVals.filter((v) => v < lowerFence || v > upperFence)
-        lines.push(`  Q1=${q1}  Q3=${q3}  IQR=${Math.round(iqr * 100) / 100}  outliers=${outliers.length} (${((outliers.length / numVals.length) * 100).toFixed(1)}%)`)
-        if (outliers.length > 0) {
-          const topOutliers = [...outliers].sort((a, b) => Math.abs(b - s.mean) - Math.abs(a - s.mean)).slice(0, 5)
-          lines.push(`  top_outlier_values: ${topOutliers.join(", ")}`)
-        }
-
-        const p10 = sorted[Math.floor(sorted.length * 0.10)]
-        const p90 = sorted[Math.floor(sorted.length * 0.90)]
-        const p99 = sorted[Math.floor(sorted.length * 0.99)]
-        lines.push(`  percentiles: p10=${p10}  p25=${q1}  p50=${sorted[Math.floor(sorted.length * 0.50)]}  p75=${q3}  p90=${p90}  p99=${p99}`)
-
-        const aboveMean = numVals.filter((v) => v > s.mean).length
-        lines.push(`  above_mean=${aboveMean} (${((aboveMean / numVals.length) * 100).toFixed(1)}%)  below_mean=${numVals.length - aboveMean} (${(((numVals.length - aboveMean) / numVals.length) * 100).toFixed(1)}%)`)
-
-        const zeros = numVals.filter((v) => v === 0).length
-        const negatives = numVals.filter((v) => v < 0).length
-        if (zeros > 0 || negatives > 0) {
-          lines.push(`  zeros=${zeros} (${((zeros / numVals.length) * 100).toFixed(1)}%)  negatives=${negatives} (${((negatives / numVals.length) * 100).toFixed(1)}%)`)
-        }
-      }
+      // Compute stddev inline
+      const numVals = SAMPLE_ROWS
+        .map((r) => Number(r[profile.key]))
+        .filter((v) => !isNaN(v))
+      const variance = numVals.length > 1
+        ? numVals.reduce((acc, v) => acc + (v - s.mean) ** 2, 0) / numVals.length
+        : 0
+      const stddev = Math.sqrt(variance)
+      const skewness = stddev > 0 ? (3 * (s.mean - s.median)) / stddev : 0
+      const skewLabel = skewness > 1 ? "right-skewed" : skewness < -1 ? "left-skewed" : "symmetric"
+      lines.push(`  min=${s.min}  max=${s.max}  mean=${s.mean.toFixed(2)}  median=${s.median}  sum=${s.sum.toLocaleString()}`)
+      lines.push(`  stddev=${stddev.toFixed(2)}  skew=${skewLabel}`)
     }
 
+    // Top 3 values only (was 5 + concentration metrics)
     if (profile.top_values.length > 0) {
-      lines.push(`  top_values:`)
-      profile.top_values.slice(0, 5).forEach((tv) => {
-        lines.push(`    "${tv.value}": ${tv.count} records (${tv.percentage}%)`)
-      })
-      const top1 = profile.top_values[0]?.percentage ?? 0
-      const top3 = profile.top_values.slice(0, 3).reduce((s, v) => s + v.percentage, 0)
-      const top5 = profile.top_values.slice(0, 5).reduce((s, v) => s + v.percentage, 0)
-      lines.push(`  concentration: top1=${top1}%  top3=${top3.toFixed(1)}%  top5=${top5.toFixed(1)}%`)
-
-      const totalNonNull = n - profile.null_count
-      if (totalNonNull > 0) {
-        const entropy = profile.top_values.reduce((e, tv) => {
-          const p = tv.count / totalNonNull
-          return e - (p > 0 ? p * Math.log2(p) : 0)
-        }, 0)
-        const maxEntropy = Math.log2(Math.min(profile.distinct_count, profile.top_values.length))
-        const normalizedEntropy = maxEntropy > 0 ? entropy / maxEntropy : 0
-        lines.push(`  diversity: entropy=${entropy.toFixed(3)}  normalized=${normalizedEntropy.toFixed(3)} (${normalizedEntropy > 0.8 ? "very diverse" : normalizedEntropy > 0.5 ? "moderately diverse" : "concentrated"})`)
-      }
+      const top3 = profile.top_values.slice(0, 3)
+      lines.push(`  top_values: ${top3.map((tv) => `"${tv.value}"=${tv.count}(${tv.percentage}%)`).join("  ")}`)
     }
   }
 
-  // 3. CATEGORY x METRIC BREAKDOWNS
+  // SECTION 3: CATEGORY x METRIC — max 1 cat x 1 metric, top 5 rows
   if (categoricalCols.length > 0 && numericCols.length > 0) {
-    lines.push("\n=== SECTION 3: CATEGORY x METRIC BREAKDOWNS ===")
-    for (const catCol of categoricalCols.slice(0, 2)) {
-      for (const numCol of numericCols.slice(0, 2)) {
-        const grouped: Record<string, number[]> = {}
-        rows.forEach((row) => {
-          const key = String(row[catCol] ?? "Unknown")
-          if (!grouped[key]) grouped[key] = []
-          const val = Number(row[numCol])
-          if (!isNaN(val)) grouped[key].push(val)
-        })
-
-        const stats = Object.entries(grouped).map(([cat, vals]) => {
-          const sum = vals.reduce((a, b) => a + b, 0)
-          const mean = vals.length > 0 ? sum / vals.length : 0
-          const sorted = [...vals].sort((a, b) => a - b)
-          const median = sorted.length > 0
-            ? sorted.length % 2 === 0
-              ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
-              : sorted[Math.floor(sorted.length / 2)]
-            : 0
-          return { cat, count: vals.length, sum, mean, median }
-        }).sort((a, b) => b.sum - a.sum)
-
-        const totalSum = stats.reduce((s, r) => s + r.sum, 0)
-        lines.push(`\n${numCol} BY ${catCol} (sorted by sum):`)
-        lines.push(`  total_sum=${Math.round(totalSum * 100) / 100}  categories=${stats.length}`)
-        stats.slice(0, 6).forEach((s) => {
-          const pct = totalSum > 0 ? ((s.sum / totalSum) * 100).toFixed(1) : "0"
-          lines.push(`  "${s.cat}": sum=${Math.round(s.sum * 100) / 100}  pct=${pct}%  count=${s.count}  mean=${s.mean.toFixed(2)}  median=${s.median}`)
-        })
-        if (stats.length >= 2) {
-          const top = stats[0], bottom = stats[stats.length - 1]
-          const ratio = bottom.sum !== 0 ? (top.sum / bottom.sum).toFixed(1) : "inf"
-          lines.push(`  TOP vs BOTTOM: "${top.cat}" (${Math.round(top.sum * 100) / 100}) is ${ratio}x "${bottom.cat}" (${Math.round(bottom.sum * 100) / 100})`)
-        }
-      }
+    lines.push("\n=== CATEGORY BREAKDOWN ===")
+    const catCol = categoricalCols[0]
+    const numCol = numericCols[0]
+    const grouped: Record<string, number[]> = {}
+    SAMPLE_ROWS.forEach((row) => {
+      const key = String(row[catCol] ?? "Unknown")
+      if (!grouped[key]) grouped[key] = []
+      const val = Number(row[numCol])
+      if (!isNaN(val)) grouped[key].push(val)
+    })
+    const stats = Object.entries(grouped)
+      .map(([cat, vals]) => {
+        const sum = vals.reduce((a, b) => a + b, 0)
+        return { cat, count: vals.length, sum, mean: sum / vals.length }
+      })
+      .sort((a, b) => b.sum - a.sum)
+    const totalSum = stats.reduce((s, r) => s + r.sum, 0)
+    lines.push(`${numCol} BY ${catCol} (total=${Math.round(totalSum * 100) / 100}):`)
+    stats.slice(0, 5).forEach((s) => {
+      const pct = totalSum > 0 ? ((s.sum / totalSum) * 100).toFixed(1) : "0"
+      lines.push(`  "${s.cat}": sum=${Math.round(s.sum * 100) / 100}  pct=${pct}%  count=${s.count}  mean=${s.mean.toFixed(2)}`)
+    })
+    if (stats.length >= 2) {
+      const ratio = stats[stats.length - 1].sum !== 0
+        ? (stats[0].sum / stats[stats.length - 1].sum).toFixed(1)
+        : "inf"
+      lines.push(`  TOP vs BOTTOM: "${stats[0].cat}" is ${ratio}x "${stats[stats.length - 1].cat}"`)
     }
   }
 
-  // 4. TIME SERIES ANALYSIS
+  // SECTION 4: TIME SERIES — max 1 date x 1 metric, last 12 periods only
   if (dateCols.length > 0 && numericCols.length > 0) {
-    lines.push("\n=== SECTION 4: TIME SERIES ANALYSIS ===")
-    for (const dateCol of dateCols.slice(0, 2)) {
-      for (const numCol of numericCols.slice(0, 3)) {
-        const monthly: Record<string, number[]> = {}
-        rows.forEach((row) => {
-          const dateVal = String(row[dateCol] ?? "")
-          const key = dateVal.substring(0, 7)
-          if (!key || key.length < 7) return
-          if (!monthly[key]) monthly[key] = []
-          const val = Number(row[numCol])
-          if (!isNaN(val)) monthly[key].push(val)
-        })
-
-        const sortedMonths = Object.keys(monthly).sort()
-        if (sortedMonths.length < 2) continue
-
-        const monthlyStats = sortedMonths.map((m) => {
-          const vals = monthly[m]
-          const sum = vals.reduce((a, b) => a + b, 0)
-          return { month: m, sum, count: vals.length, mean: sum / vals.length }
-        })
-
-        lines.push(`\n${numCol} OVER TIME (${dateCol}):`)
-        lines.push(`  range: ${sortedMonths[0]} to ${sortedMonths[sortedMonths.length - 1]}  periods=${sortedMonths.length}`)
-        monthlyStats.forEach((m) => {
-          lines.push(`  ${m.month}: sum=${Math.round(m.sum * 100) / 100}  count=${m.count}  mean=${m.mean.toFixed(2)}`)
-        })
-
-        if (monthlyStats.length >= 2) {
-          lines.push(`  MOM GROWTH RATES:`)
-          const growthRates: number[] = []
-          for (let i = 1; i < monthlyStats.length; i++) {
-            const prev = monthlyStats[i - 1].sum
-            const curr = monthlyStats[i].sum
-            const growth = prev !== 0 ? ((curr - prev) / Math.abs(prev)) * 100 : 0
-            growthRates.push(growth)
-            lines.push(`  ${monthlyStats[i].month}: ${growth >= 0 ? "+" : ""}${growth.toFixed(1)}%`)
-          }
-          const avgGrowth = growthRates.reduce((a, b) => a + b, 0) / growthRates.length
-          const positiveMonths = growthRates.filter((g) => g > 0).length
-          lines.push(`  avg_mom_growth=${avgGrowth.toFixed(2)}%  positive_months=${positiveMonths}/${growthRates.length}  best=${Math.max(...growthRates).toFixed(1)}%  worst=${Math.min(...growthRates).toFixed(1)}%`)
-
-          const half = Math.floor(monthlyStats.length / 2)
-          const firstHalfAvg = monthlyStats.slice(0, half).reduce((s, m) => s + m.sum, 0) / half
-          const secondHalfAvg = monthlyStats.slice(half).reduce((s, m) => s + m.sum, 0) / (monthlyStats.length - half)
-          const overallTrend = firstHalfAvg > 0 ? ((secondHalfAvg - firstHalfAvg) / firstHalfAvg * 100).toFixed(1) : "N/A"
-          lines.push(`  overall_trend: first_half_avg=${firstHalfAvg.toFixed(2)} -> second_half_avg=${secondHalfAvg.toFixed(2)} (${overallTrend}% change)`)
-
-          const peak = monthlyStats.reduce((a, b) => b.sum > a.sum ? b : a)
-          const trough = monthlyStats.reduce((a, b) => b.sum < a.sum ? b : a)
-          lines.push(`  peak=${peak.month} (${Math.round(peak.sum * 100) / 100})  trough=${trough.month} (${Math.round(trough.sum * 100) / 100})`)
-        }
-
-        const yearlyTotals: Record<string, number> = {}
-        monthlyStats.forEach((m) => {
-          const year = m.month.substring(0, 4)
-          yearlyTotals[year] = (yearlyTotals[year] || 0) + m.sum
-        })
-        const years = Object.keys(yearlyTotals).sort()
-        if (years.length >= 2) {
-          lines.push(`  YEARLY: ${years.map((y) => `${y}=${Math.round(yearlyTotals[y] * 100) / 100}`).join("  ")}`)
-          const yoy = ((yearlyTotals[years[years.length - 1]] - yearlyTotals[years[years.length - 2]]) / Math.abs(yearlyTotals[years[years.length - 2]]) * 100)
-          lines.push(`  latest_yoy_growth=${yoy.toFixed(1)}%`)
-        }
-      }
+    lines.push("\n=== TIME SERIES ===")
+    const dateCol = dateCols[0]
+    const numCol = numericCols[0]
+    const monthly: Record<string, number[]> = {}
+    SAMPLE_ROWS.forEach((row) => {
+      const key = String(row[dateCol] ?? "").substring(0, 7)
+      if (!key || key.length < 7) return
+      if (!monthly[key]) monthly[key] = []
+      const val = Number(row[numCol])
+      if (!isNaN(val)) monthly[key].push(val)
+    })
+    const sortedMonths = Object.keys(monthly).sort().slice(-12) // last 12 only
+    if (sortedMonths.length >= 2) {
+      lines.push(`${numCol} monthly (${dateCol}), last ${sortedMonths.length} periods:`)
+      sortedMonths.forEach((m) => {
+        const vals = monthly[m]
+        const sum = vals.reduce((a, b) => a + b, 0)
+        lines.push(`  ${m}: sum=${Math.round(sum * 100) / 100}  count=${vals.length}`)
+      })
+      // Simple trend: first half vs second half avg
+      const half = Math.floor(sortedMonths.length / 2)
+      const firstAvg = sortedMonths.slice(0, half).reduce((s, m) => s + monthly[m].reduce((a, b) => a + b, 0), 0) / half
+      const secondAvg = sortedMonths.slice(half).reduce((s, m) => s + monthly[m].reduce((a, b) => a + b, 0), 0) / (sortedMonths.length - half)
+      const trend = firstAvg > 0 ? (((secondAvg - firstAvg) / firstAvg) * 100).toFixed(1) : "N/A"
+      lines.push(`  trend: first_half_avg=${firstAvg.toFixed(2)} -> second_half_avg=${secondAvg.toFixed(2)} (${trend}% change)`)
     }
   }
 
-  // 5. CORRELATIONS
+  // SECTION 5: CORRELATIONS — max 3 pairs
   if (numericCols.length >= 2) {
-    lines.push("\n=== SECTION 5: NUMERIC CORRELATIONS (Pearson r) ===")
-    const pairs = []
-    for (let i = 0; i < Math.min(numericCols.length, 6); i++) {
-      for (let j = i + 1; j < Math.min(numericCols.length, 6); j++) {
-        const colA = numericCols[i]
-        const colB = numericCols[j]
-        const valsA = rows.map((r) => Number(r[colA])).filter((v) => !isNaN(v))
-        const valsB = rows.map((r) => Number(r[colB])).filter((v) => !isNaN(v))
+    lines.push("\n=== CORRELATIONS ===")
+    const pairs: { colA: string; colB: string; r: number }[] = []
+    for (let i = 0; i < Math.min(numericCols.length, 4); i++) {
+      for (let j = i + 1; j < Math.min(numericCols.length, 4); j++) {
+        const colA = numericCols[i], colB = numericCols[j]
+        const valsA = SAMPLE_ROWS.map((r) => Number(r[colA])).filter((v) => !isNaN(v))
+        const valsB = SAMPLE_ROWS.map((r) => Number(r[colB])).filter((v) => !isNaN(v))
         const len = Math.min(valsA.length, valsB.length)
         if (len < 5) continue
         const meanA = valsA.slice(0, len).reduce((a, b) => a + b, 0) / len
@@ -451,64 +644,41 @@ function buildDataSummary(
           num += da * db; denomA += da * da; denomB += db * db
         }
         const r = denomA > 0 && denomB > 0 ? num / Math.sqrt(denomA * denomB) : 0
-        const strength = Math.abs(r) > 0.7 ? "strong" : Math.abs(r) > 0.4 ? "moderate" : Math.abs(r) > 0.2 ? "weak" : "negligible"
-        pairs.push({ colA, colB, r: Math.round(r * 1000) / 1000, strength, direction: r > 0 ? "positive" : "negative" })
+        pairs.push({ colA, colB, r: Math.round(r * 1000) / 1000 })
       }
     }
-    pairs.sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
-    pairs.forEach((p) => lines.push(`  ${p.colA} <-> ${p.colB}: r=${p.r} (${p.strength} ${p.direction})`))
-    if (pairs.length === 0) lines.push("  Not enough numeric columns for correlation.")
+    pairs
+      .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
+      .slice(0, 3)
+      .forEach((p) => {
+        const strength = Math.abs(p.r) > 0.7 ? "strong" : Math.abs(p.r) > 0.4 ? "moderate" : "weak"
+        lines.push(`  ${p.colA} <-> ${p.colB}: r=${p.r} (${strength} ${p.r > 0 ? "positive" : "negative"})`)
+      })
   }
 
-  // 6. BOOLEAN SEGMENT COMPARISONS
-  if (boolCols.length > 0 && numericCols.length > 0) {
-    lines.push("\n=== SECTION 6: BOOLEAN SEGMENT COMPARISONS ===")
-    for (const boolCol of boolCols.slice(0, 3)) {
-      for (const numCol of numericCols.slice(0, 3)) {
-        const groups: Record<string, number[]> = {}
-        rows.forEach((row) => {
-          const key = String(row[boolCol] ?? "unknown").toLowerCase()
-          if (!groups[key]) groups[key] = []
-          const val = Number(row[numCol])
-          if (!isNaN(val)) groups[key].push(val)
-        })
-        lines.push(`\n${numCol} BY ${boolCol}:`)
-        Object.entries(groups).forEach(([seg, vals]) => {
-          const sum = vals.reduce((a, b) => a + b, 0)
-          lines.push(`  ${seg}: count=${vals.length} (${((vals.length / n) * 100).toFixed(1)}%)  sum=${Math.round(sum * 100) / 100}  mean=${(sum / vals.length).toFixed(2)}`)
-        })
-      }
-    }
-  }
-
-  // 7. DATA QUALITY SIGNALS
-  lines.push("\n=== SECTION 7: DATA QUALITY SIGNALS ===")
+  // SECTION 6: DATA QUALITY — only flag actual problems
+  const qualityIssues: string[] = []
   columnProfiles.forEach((p) => {
     const nullPct = (p.null_count / n) * 100
-    if (nullPct > 50) lines.push(`  HIGH NULL: "${p.key}" has ${nullPct.toFixed(1)}% nulls`)
-    else if (nullPct > 20) lines.push(`  MODERATE NULL: "${p.key}" has ${nullPct.toFixed(1)}% nulls`)
-    if (p.dtype === "categorical" && p.distinct_count === n) lines.push(`  UNIQUE IDs: "${p.key}" is likely an ID column`)
-    if (p.dtype === "categorical" && p.distinct_count === 1) lines.push(`  CONSTANT: "${p.key}" has only 1 unique value`)
-    if (p.dtype === "numeric" && p.stats) {
-      const numVals = rows.map((r) => Number(r[p.key])).filter((v) => !isNaN(v))
-      const variance = numVals.reduce((acc, v) => acc + (v - p.stats!.mean) ** 2, 0) / numVals.length
-      const stddev = Math.sqrt(variance)
-      const cv = p.stats.mean !== 0 ? stddev / Math.abs(p.stats.mean) : 0
-      if (cv > 2) lines.push(`  HIGH VARIABILITY: "${p.key}" CV=${(cv * 100).toFixed(0)}%`)
-    }
+    if (nullPct > 20) qualityIssues.push(`"${p.key}" ${nullPct.toFixed(1)}% nulls`)
+    if (p.dtype === "categorical" && p.distinct_count === 1) qualityIssues.push(`"${p.key}" constant value`)
+    if (p.dtype === "categorical" && p.distinct_count === n) qualityIssues.push(`"${p.key}" likely ID col`)
   })
+  if (qualityIssues.length > 0) {
+    lines.push("\n=== DATA QUALITY ISSUES ===")
+    qualityIssues.forEach((i) => lines.push(`  ${i}`))
+  }
 
-  // 8. SAMPLE DATA — limited to 5 rows x 8 cols to save tokens
-  lines.push("\n=== SECTION 8: SAMPLE DATA (first 5 rows) ===")
-  const sampleCols = columns.slice(0, 8).map((c) => c.key)
+  // SECTION 7: SAMPLE — 3 rows x 6 cols max
+  lines.push("\n=== SAMPLE (3 rows) ===")
+  const sampleCols = columns.slice(0, 6).map((c) => c.key)
   lines.push(sampleCols.join(" | "))
-  rows.slice(0, 5).forEach((row) => {
+  rows.slice(0, 3).forEach((row) => {
     lines.push(sampleCols.map((c) => String(row[c] ?? "").substring(0, 20)).join(" | "))
   })
 
   return lines.join("\n")
 }
-
 /* ── Debug Logger ── */
 
 function log(stage: string, data?: unknown) {
@@ -549,6 +719,7 @@ function logError(stage: string, error: unknown) {
 /* ── AI Analysis via Groq ── */
 
 async function runAIAnalysis(dataSummary: string): Promise<{
+  title: string
   kpis: KPI[]
   charts: ChartData[]
   description: string
@@ -560,7 +731,7 @@ async function runAIAnalysis(dataSummary: string): Promise<{
 
   // Cap summary to ~8,000 tokens (≈32,000 chars) to stay under Groq's 12k TPM limit.
   // The static prompt template consumes ~2,500 tokens; response needs ~1,500 tokens headroom.
-  const MAX_SUMMARY_CHARS = 14_000
+  const MAX_SUMMARY_CHARS = 8_000
   const safeSummary =
     dataSummary.length > MAX_SUMMARY_CHARS
       ? dataSummary.substring(0, MAX_SUMMARY_CHARS) +
@@ -596,6 +767,7 @@ GOOD: "Customer acquisition cost has risen 3.4x while average order value has be
 Return ONLY valid JSON. No markdown fences, no text outside the JSON object.
 
 {
+  "title": "A short, specific title (5-8 words) that captures what this dataset IS about — e.g. 'Q1 2025 Invoice Data — TechSupply Co.' or 'Shopify Orders by Product Category 2024'. Not generic like 'Data Analysis Report'.",
   "kpis": [
     {
       "label": "METRIC NAME IN CAPS (max 4 words)",
@@ -699,6 +871,7 @@ ${safeSummary}`
   }
 
   let aiResult: {
+    title: string
     kpis: KPI[]
     charts: ChartData[]
     description: string
@@ -766,6 +939,7 @@ ${safeSummary}`
   }))
 
   return {
+    title: aiResult.title || "Data Analysis Report",
     kpis: aiResult.kpis || [],
     charts: enrichedCharts,
     description: aiResult.description || "",
@@ -838,6 +1012,7 @@ export async function POST(request: NextRequest) {
       ...aiAnalysis,
       column_profiles: columnProfiles,
       meta: {
+        title: aiAnalysis.title,
         total_records: rows.length,
         numeric_columns: numericCols,
         categorical_columns: categoricalCols,

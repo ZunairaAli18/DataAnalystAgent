@@ -72,7 +72,13 @@ export default function IngestionPage() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState("Direct Connectors")
   const [selectedConnector, setSelectedConnector] = useState<string | null>(null)
-
+  // Multi-PDF state
+const [multiPdfFiles, setMultiPdfFiles] = useState<File[]>([])
+const [multiPdfStatus, setMultiPdfStatus] = useState<UploadStatus>("idle")
+const [multiPdfMessage, setMultiPdfMessage] = useState("")
+const [multiPdfDatasetId, setMultiPdfDatasetId] = useState<string | null>(null)
+const [uploadMode, setUploadMode] = useState<"single" | "multi-pdf">("single")
+const multiPdfInputRef = useRef<HTMLInputElement>(null)
   // SAP state
   const [showSAPModal, setShowSAPModal] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
@@ -171,7 +177,68 @@ const [quickBooksStatus, setQuickBooksStatus] = useState<ConnectorStatus>({
       setSheetsStatus({ status: "idle", message: "", datasetId: null })
     }
   }
+  //Multi pdf handlers
+  const handleMultiPdfSelect = (files: FileList | null) => {
+  if (!files || files.length === 0) return
+  const pdfs = Array.from(files).filter(f => f.name.toLowerCase().endsWith(".pdf"))
+  if (pdfs.length === 0) {
+    setMultiPdfMessage("Please select PDF files only.")
+    setMultiPdfStatus("error")
+    return
+  }
+  setMultiPdfFiles(prev => {
+    const existingNames = new Set(prev.map(f => f.name))
+    const newOnes = pdfs.filter(f => !existingNames.has(f.name))
+    return [...prev, ...newOnes]
+  })
+  setMultiPdfStatus("idle")
+  setMultiPdfMessage("")
+}
 
+const removeMultiPdfFile = (index: number) => {
+  setMultiPdfFiles(prev => prev.filter((_, i) => i !== index))
+}
+
+const handleMultiPdfUpload = async () => {
+  if (multiPdfFiles.length === 0) return
+  setMultiPdfStatus("uploading")
+  setMultiPdfMessage(`Uploading ${multiPdfFiles.length} PDF(s)...`)
+  try {
+    const formData = new FormData()
+    multiPdfFiles.forEach(f => formData.append("files", f))
+    const response = await fetch(`${API_BASE_URL}/ingest/upload-pdfs`, { method: "POST", body: formData })
+    
+    if (!response.ok) {
+      const errData = await response.json().catch(() => null)
+      const detail = errData?.detail
+
+      // Handle the structured unrelated_files error
+      if (detail?.error === "unrelated_files") {
+        const hint = detail.hint || detail.message
+        throw new Error(`Unrelated files: ${hint}`)
+      }
+
+      throw new Error(detail?.message || detail || `Upload failed: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    if (data.dataset_id) localStorage.setItem(PERSISTED_DATASET_KEY, data.dataset_id)
+    setMultiPdfDatasetId(data.dataset_id)
+    setMultiPdfStatus("success")
+    setMultiPdfMessage(data.message || `${multiPdfFiles.length} PDF(s) uploaded successfully!`)
+  } catch (error) {
+    setMultiPdfStatus("error")
+    setMultiPdfMessage(error instanceof Error ? error.message : "Upload failed. Please try again.")
+  }
+}
+
+const resetMultiPdf = () => {
+  setMultiPdfFiles([])
+  setMultiPdfStatus("idle")
+  setMultiPdfMessage("")
+  setMultiPdfDatasetId(null)
+  if (multiPdfInputRef.current) multiPdfInputRef.current.value = ""
+}
   // ── SAP handlers ─────────────────────────────────────────────────────────
   const handleSAPSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -406,83 +473,234 @@ const [quickBooksStatus, setQuickBooksStatus] = useState<ConnectorStatus>({
 
         {/* File Upload Tab */}
         {activeTab === "File Upload" && (
-          <div className="max-w-2xl mx-auto space-y-6">
-            <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={(e) => handleFileSelect(e.target.files)} className="hidden" />
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              className={cn(
-                "border-2 border-dashed rounded-xl p-12 text-center transition-all cursor-pointer",
-                isDragging ? "border-primary bg-primary/10" : "border-border hover:border-primary/50",
-                uploadState.status === "error" && "border-destructive"
-              )}
-            >
-              <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center mx-auto mb-4">
-                <Upload className="w-8 h-8 text-muted-foreground" />
-              </div>
-              <p className="text-foreground font-medium mb-2">{isDragging ? "Drop your file here" : "Drop files here or click to upload"}</p>
-              <p className="text-sm text-muted-foreground">Supports CSV, Excel, and PDF files</p>
-            </div>
+  <div className="max-w-2xl mx-auto space-y-6">
 
-            {uploadState.file && (
-              <div className="bg-card border border-border rounded-xl p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
-                      <Upload className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-foreground font-medium">{uploadState.file.name}</p>
-                      <p className="text-sm text-muted-foreground">{(uploadState.file.size / 1024 / 1024).toFixed(2)} MB</p>
-                    </div>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); resetUpload() }} className="p-2 hover:bg-secondary rounded-lg transition-colors">
-                    <X className="w-5 h-5 text-muted-foreground" />
-                  </button>
+    {/* Mode Toggle */}
+    <div className="flex items-center justify-center gap-2 p-1 bg-secondary rounded-full w-fit mx-auto">
+      <button
+        onClick={() => setUploadMode("single")}
+        className={cn(
+          "px-5 py-2 rounded-full text-sm font-medium transition-all",
+          uploadMode === "single" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+        )}
+      >
+        Single File
+      </button>
+      <button
+        onClick={() => setUploadMode("multi-pdf")}
+        className={cn(
+          "px-5 py-2 rounded-full text-sm font-medium transition-all",
+          uploadMode === "multi-pdf" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+        )}
+      >
+        Multiple PDFs
+      </button>
+    </div>
+
+    {/* ── Single File Upload ── */}
+    {uploadMode === "single" && (
+      <>
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={(e) => handleFileSelect(e.target.files)} className="hidden" />
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={cn(
+            "border-2 border-dashed rounded-xl p-12 text-center transition-all cursor-pointer",
+            isDragging ? "border-primary bg-primary/10" : "border-border hover:border-primary/50",
+            uploadState.status === "error" && "border-destructive"
+          )}
+        >
+          <div className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center mx-auto mb-4">
+            <Upload className="w-8 h-8 text-muted-foreground" />
+          </div>
+          <p className="text-foreground font-medium mb-2">{isDragging ? "Drop your file here" : "Drop files here or click to upload"}</p>
+          <p className="text-sm text-muted-foreground">Supports CSV, Excel, and PDF files</p>
+        </div>
+
+        {uploadState.file && (
+          <div className="bg-card border border-border rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
+                  <Upload className="w-5 h-5 text-primary" />
                 </div>
-                {uploadState.status === "idle" && (
-                  <button onClick={handleUpload} className="w-full mt-4 py-3 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors">Upload File</button>
-                )}
-                {uploadState.status === "uploading" && (
-                  <div className="mt-4 flex items-center justify-center gap-2 py-3 text-primary">
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    <span>{uploadState.message}</span>
-                  </div>
-                )}
-                {uploadState.status === "success" && (
-                  <div className="mt-4 space-y-3">
-                    <div className="flex items-center gap-2 text-green-500">
-                      <CheckCircle className="w-5 h-5" />
-                      <span>{uploadState.message}</span>
-                    </div>
-                    {uploadState.datasetId && (
-                      <div className="space-y-3">
-                        <p className="text-sm text-muted-foreground">Dataset ID: <code className="bg-secondary px-2 py-1 rounded">{uploadState.datasetId}</code></p>
-                        <button onClick={() => router.push(`/view-data?dataset_id=${uploadState.datasetId}`)} className="w-full py-3 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
-                          View Data <ArrowRight className="w-5 h-5" />
-                        </button>
-                      </div>
-                    )}
-                    <button onClick={resetUpload} className="w-full py-3 bg-secondary text-foreground font-semibold rounded-lg hover:bg-secondary/80 transition-colors">Upload Another File</button>
-                  </div>
-                )}
-                {uploadState.status === "error" && (
-                  <div className="mt-4 space-y-3">
-                    <div className="flex items-center gap-2 text-destructive"><AlertCircle className="w-5 h-5" /><span>{uploadState.message}</span></div>
-                    <button onClick={resetUpload} className="w-full py-3 bg-secondary text-foreground font-semibold rounded-lg hover:bg-secondary/80 transition-colors">Try Again</button>
-                  </div>
-                )}
+                <div>
+                  <p className="text-foreground font-medium">{uploadState.file.name}</p>
+                  <p className="text-sm text-muted-foreground">{(uploadState.file.size / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); resetUpload() }} className="p-2 hover:bg-secondary rounded-lg transition-colors">
+                <X className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+            {uploadState.status === "idle" && (
+              <button onClick={handleUpload} className="w-full mt-4 py-3 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors">Upload File</button>
+            )}
+            {uploadState.status === "uploading" && (
+              <div className="mt-4 flex items-center justify-center gap-2 py-3 text-primary">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>{uploadState.message}</span>
               </div>
             )}
-            {!uploadState.file && uploadState.status === "error" && (
-              <div className="flex items-center gap-2 text-destructive bg-destructive/10 p-4 rounded-xl">
-                <AlertCircle className="w-5 h-5" /><span>{uploadState.message}</span>
+            {uploadState.status === "success" && (
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center gap-2 text-green-500">
+                  <CheckCircle className="w-5 h-5" />
+                  <span>{uploadState.message}</span>
+                </div>
+                {uploadState.datasetId && (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">Dataset ID: <code className="bg-secondary px-2 py-1 rounded">{uploadState.datasetId}</code></p>
+                    <button onClick={() => router.push(`/view-data?dataset_id=${uploadState.datasetId}`)} className="w-full py-3 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
+                      View Data <ArrowRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
+                <button onClick={resetUpload} className="w-full py-3 bg-secondary text-foreground font-semibold rounded-lg hover:bg-secondary/80 transition-colors">Upload Another File</button>
+              </div>
+            )}
+            {uploadState.status === "error" && (
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center gap-2 text-destructive"><AlertCircle className="w-5 h-5" /><span>{uploadState.message}</span></div>
+                <button onClick={resetUpload} className="w-full py-3 bg-secondary text-foreground font-semibold rounded-lg hover:bg-secondary/80 transition-colors">Try Again</button>
               </div>
             )}
           </div>
         )}
+        {!uploadState.file && uploadState.status === "error" && (
+          <div className="flex items-center gap-2 text-destructive bg-destructive/10 p-4 rounded-xl">
+            <AlertCircle className="w-5 h-5" /><span>{uploadState.message}</span>
+          </div>
+        )}
+      </>
+    )}
+
+    {/* ── Multi-PDF Upload ── */}
+    {uploadMode === "multi-pdf" && (
+      <>
+        <input
+          ref={multiPdfInputRef}
+          type="file"
+          accept=".pdf"
+          multiple
+          onChange={(e) => handleMultiPdfSelect(e.target.files)}
+          className="hidden"
+        />
+
+        {/* Drop zone — only show when not in success state */}
+        {multiPdfStatus !== "success" && (
+          <div
+            onClick={() => multiPdfInputRef.current?.click()}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleMultiPdfSelect(e.dataTransfer.files) }}
+            className={cn(
+              "border-2 border-dashed rounded-xl p-10 text-center transition-all cursor-pointer",
+              isDragging ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
+            )}
+          >
+            <div className="w-16 h-16 rounded-full bg-pink-500/10 flex items-center justify-center mx-auto mb-4">
+              <Upload className="w-8 h-8 text-pink-500" />
+            </div>
+            <p className="text-foreground font-medium mb-2">Drop multiple PDFs here or click to select</p>
+            <p className="text-sm text-muted-foreground">PDF files only · Select as many as you need</p>
+          </div>
+        )}
+
+        {/* File list */}
+        {multiPdfFiles.length > 0 && (
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <span className="text-sm font-medium text-foreground">{multiPdfFiles.length} PDF{multiPdfFiles.length > 1 ? "s" : ""} selected</span>
+              {multiPdfStatus === "idle" && (
+                <button onClick={resetMultiPdf} className="text-xs text-muted-foreground hover:text-destructive transition-colors">Clear all</button>
+              )}
+            </div>
+            <div className="divide-y divide-border max-h-64 overflow-y-auto">
+              {multiPdfFiles.map((file, i) => (
+                <div key={i} className="flex items-center gap-3 px-4 py-3">
+                  <div className="w-8 h-8 rounded-md bg-pink-500/10 flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs font-bold text-pink-500">PDF</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground truncate">{file.name}</p>
+                    <p className="text-xs text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
+                  {multiPdfStatus === "idle" && (
+                    <button onClick={() => removeMultiPdfFile(i)} className="p-1.5 hover:bg-secondary rounded-md transition-colors flex-shrink-0">
+                      <X className="w-4 h-4 text-muted-foreground" />
+                    </button>
+                  )}
+                  {multiPdfStatus === "uploading" && (
+                    <Loader2 className="w-4 h-4 text-primary animate-spin flex-shrink-0" />
+                  )}
+                  {multiPdfStatus === "success" && (
+                    <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="px-4 py-4 border-t border-border space-y-3">
+              {multiPdfStatus === "idle" && (
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => multiPdfInputRef.current?.click()}
+                    className="flex-1 py-2.5 bg-secondary text-foreground font-medium rounded-lg hover:bg-secondary/80 transition-colors text-sm"
+                  >
+                    Add More
+                  </button>
+                  <button
+                    onClick={handleMultiPdfUpload}
+                    className="flex-1 py-2.5 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors text-sm flex items-center justify-center gap-2"
+                  >
+                    Upload {multiPdfFiles.length} PDF{multiPdfFiles.length > 1 ? "s" : ""}
+                  </button>
+                </div>
+              )}
+              {multiPdfStatus === "uploading" && (
+                <div className="flex items-center justify-center gap-2 py-2 text-primary">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="text-sm">{multiPdfMessage}</span>
+                </div>
+              )}
+              {multiPdfStatus === "success" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-green-500">
+                    <CheckCircle className="w-5 h-5" /><span className="text-sm">{multiPdfMessage}</span>
+                  </div>
+                  {multiPdfDatasetId && (
+                    <div className="space-y-3">
+                      <p className="text-sm text-muted-foreground">Dataset ID: <code className="bg-secondary px-2 py-1 rounded">{multiPdfDatasetId}</code></p>
+                      <button onClick={() => router.push(`/view-data?dataset_id=${multiPdfDatasetId}`)} className="w-full py-3 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
+                        View Data <ArrowRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  )}
+                  <button onClick={resetMultiPdf} className="w-full py-2.5 bg-secondary text-foreground font-medium rounded-lg hover:bg-secondary/80 transition-colors text-sm">Upload More PDFs</button>
+                </div>
+              )}
+              {multiPdfStatus === "error" && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-destructive"><AlertCircle className="w-5 h-5" /><span className="text-sm">{multiPdfMessage}</span></div>
+                  <button onClick={resetMultiPdf} className="w-full py-2.5 bg-secondary text-foreground font-medium rounded-lg hover:bg-secondary/80 transition-colors text-sm">Try Again</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {multiPdfFiles.length === 0 && multiPdfStatus === "error" && (
+          <div className="flex items-center gap-2 text-destructive bg-destructive/10 p-4 rounded-xl">
+            <AlertCircle className="w-5 h-5" /><span>{multiPdfMessage}</span>
+          </div>
+        )}
+      </>
+    )}
+  </div>
+)}
 
         <div className="flex justify-center mt-12">
           <button className="flex items-center gap-2 px-8 py-3 bg-primary text-primary-foreground font-semibold rounded-full hover:bg-primary/90 transition-colors">

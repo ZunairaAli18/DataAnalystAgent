@@ -118,6 +118,7 @@ interface ColumnProfile {
 }
 
 interface AnalysisResult {
+  title?: string
   kpis: KPI[]
   charts: ChartConfig[]
   description: string
@@ -126,6 +127,7 @@ interface AnalysisResult {
   conclusions: Conclusion[]
   column_profiles: ColumnProfile[]
   meta: {
+    title?: string
     total_records: number
     numeric_columns: string[]
     categorical_columns: string[]
@@ -1293,7 +1295,7 @@ const runAnalysis = useCallback(async (forceRefresh = false) => {
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `data-analysis-report-${new Date().toISOString().split("T")[0]}.pdf`
+      a.download = `${analysis.data.title ?? "data-analysis-report"}-${new Date().toISOString().split("T")[0]}.pdf`
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -1387,8 +1389,9 @@ const runAnalysis = useCallback(async (forceRefresh = false) => {
             <div className="flex items-center gap-3 mb-1">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-primary" />
-                <h1 className="text-2xl font-bold text-foreground">AI Analysis Dashboard</h1>
-              </div>
+<h1 className="text-2xl font-bold text-foreground">
+    {analysis.data.meta?.title || analysis.data.title || "AI Analysis Dashboard"}
+  </h1>              </div>
               <span className="px-3 py-1 text-xs font-medium bg-primary/20 text-primary rounded">
                 {meta.total_records.toLocaleString()} RECORDS
               </span>
