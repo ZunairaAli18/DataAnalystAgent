@@ -28,7 +28,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Data Analytics Agent Ingestion")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:8080", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1846,3 +1846,21 @@ async def upload_multiple_pdfs(
         "message": f"{len(file_contents)} PDF(s) validated and upload started.",
         "files_accepted": [fname for fname, _ in file_contents],
     }
+
+
+# ── PDF Report Generation Endpoint ────────────────────────────────────────────
+@app.post("/generate-pdf-report")
+async def generate_pdf_report(request_data: dict):
+    """
+    Generates a PDF report from analysis data.
+    Accepts JSON analysis data and returns PDF bytes.
+    """
+    try:
+        from generate_report import generate
+        pdf_bytes = generate(request_data)
+        return {
+            "success": True,
+            "pdf_data": pdf_bytes.hex()  # Convert to hex string for JSON serialization
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")

@@ -6,7 +6,7 @@ services:
     github:
       branch: main
       deploy_on_push: true
-    build_command: npm install --legacy-peer-deps && npm run build && (python3 -m pip install -r ../analytics_agent/requirements.txt || python -m pip install -r ../analytics_agent/requirements.txt)
+    build_command: npm config set legacy-peer-deps true && npm install && npm run build
     run_command: npm run start
     environment_slug: node-20
     instance_size_slug: basic-xxs
