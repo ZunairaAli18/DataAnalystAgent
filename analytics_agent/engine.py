@@ -1,49 +1,65 @@
 import io
+import logging
 from typing import Dict
 import requests
 from gotrue import Any, List
 import polars as pl
 from supabase import create_client, Client
+from storage import S3_ENV_VARS, get_dataset_s3_source, get_s3_storage_options, is_production, require_env
+
+logger = logging.getLogger(__name__)
+
+_supabase_env = require_env("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
+if is_production():
+    require_env(*S3_ENV_VARS.values())
 
 class SupabaseDataEngine:
-    # Initialize your client (Use your Env variables)
-    url = "https://ywqeszodqyutovublqmx.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3cWVzem9kcXl1dG92dWJscW14Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTk0ODEyMCwiZXhwIjoyMDg1NTI0MTIwfQ.d0bSbD7G_jXC0jLY1e1NuM4ci_VtRkjQv5228vCkPTY"
+    url = _supabase_env["SUPABASE_URL"]
+    key = _supabase_env["SUPABASE_SERVICE_ROLE_KEY"]
     supabase: Client = create_client(url, key)
     BUCKET = "datasets"
-    S3_OPTIONS = {
-        "aws_access_key_id": "a2b2d4f76c5b2dbcb1bc8986e6952915",
-        "aws_secret_access_key": "d9852b97836cafd71625bd5247af5e8d1fc7e2e382b19db7541f64625c2b1153",
-        "endpoint_url": "https://ywqeszodqyutovublqmx.storage.supabase.co/storage/v1/s3",
-        "region": "ap-south-1", # Corrected to your region
-        "use_path_style": "true"
-    }
+    # Same SUPABASE_S3_* env vars as pagination. None when they're not set, in which
+    # case profiling, cleaning and cleaning-preview can't read from storage.
+    S3_OPTIONS = get_s3_storage_options()
+    if S3_OPTIONS is None:
+        logger.warning(
+            "SUPABASE_S3_* env vars not set: /datasets/{id}/profile and the version "
+            "cleaning endpoints will fail; /data/{id} falls back to full downloads"
+        )
     @classmethod
     def get_dataset_data(cls, dataset_id: str, limit: int = 100, offset: int = 0):
       """
-    Downloads parquet file from Supabase Storage and returns paginated data.
+    Reads only the requested page of the parquet file from Supabase Storage.
     Returns columns metadata and rows as dictionaries.
       """
-      file_path = f"datasets/{dataset_id}/data.parquet"
-    
-    # Download the parquet file from Supabase Storage
-      response = cls.supabase.storage.from_(cls.BUCKET).download(file_path)
-    
-    # Read into Polars DataFrame
-      df = pl.read_parquet(io.BytesIO(response))
-    
-    # Get total count before pagination
-      total_count = len(df)
-    
+      s3_source = get_dataset_s3_source(cls.BUCKET, dataset_id)
+
+      if s3_source is not None:
+        # Lazy scan over the S3-compatible endpoint: only the parquet footer
+        # and the row groups covering the requested page are fetched
+        s3_path, storage_options = s3_source
+        lf = pl.scan_parquet(s3_path, storage_options=storage_options)
+        schema = lf.collect_schema()
+        total_count = lf.select(pl.len()).collect().item()
+        rows = lf.slice(offset, limit).collect().to_dicts()
+      else:
+        logger.warning(
+          "SUPABASE_S3_* env vars not set; downloading full parquet for dataset %s",
+          dataset_id,
+        )
+        file_path = f"datasets/{dataset_id}/data.parquet"
+        response = cls.supabase.storage.from_(cls.BUCKET).download(file_path)
+        df = pl.read_parquet(io.BytesIO(response))
+        schema = df.schema
+        total_count = len(df)
+        rows = df.slice(offset, limit).to_dicts()
+
     # Get column metadata
       columns = [
         {"key": name, "label": name.upper(), "dtype": str(dtype)}
-        for name, dtype in df.schema.items()
+        for name, dtype in schema.items()
       ]
-    
-    # Apply pagination and convert to list of dicts
-      rows = df.slice(offset, limit).to_dicts()
-    
+
       return {
         "dataset_id": dataset_id,
         "columns": columns,

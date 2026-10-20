@@ -3,12 +3,10 @@ from sqlalchemy import create_engine, Column, String, Integer, DateTime, JSON, B
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
-from dotenv import load_dotenv
-
-load_dotenv()
+from storage import require_env
 
 # We use the direct Supabase Postgres connection
-engine = create_engine(os.getenv("DATABASE_URL"))
+engine = create_engine(require_env("DATABASE_URL")["DATABASE_URL"])
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
