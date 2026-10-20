@@ -7,7 +7,7 @@ import { AppLayout } from "@/components/app-layout"
 import { Zap, Upload, CheckCircle, AlertCircle, Loader2, X, ArrowRight, Eye, EyeOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+import { API_BASE_URL } from "@/lib/api"
 const PERSISTED_DATASET_KEY = "activeDatasetId"
 
 const tabs = ["Direct Connectors", "File Upload"]

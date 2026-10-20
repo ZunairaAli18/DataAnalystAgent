@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import Groq from "groq-sdk"
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
 const requestTimestamps: number[] = []
 const RATE_LIMIT_WINDOW_MS = 60_000
@@ -20,7 +18,8 @@ function isRateLimited(): boolean {
 
 // ─── Retry with exponential back-off ─────────────────────────────────────────
 async function groqWithRetry(
-  params: Parameters<typeof groq.chat.completions.create>[0],
+  groq: Groq,
+  params: Parameters<Groq["chat"]["completions"]["create"]>[0],
   retries = 2
 ) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -209,7 +208,7 @@ function buildSuggestionsContext(analysis: ChatRequest["analysis"]): string {
 
 // ─── Suggestions handler ──────────────────────────────────────────────────────
 
-async function handleSuggestions(analysis: ChatRequest["analysis"]): Promise<NextResponse> {
+async function handleSuggestions(groq: Groq, analysis: ChatRequest["analysis"]): Promise<NextResponse> {
   if (!analysis) return NextResponse.json({ questions: [] })
 
   if (isRateLimited()) {
@@ -219,7 +218,7 @@ async function handleSuggestions(analysis: ChatRequest["analysis"]): Promise<Nex
   try {
     const documentContext = buildSuggestionsContext(analysis)
 
-    const completion = await groqWithRetry({
+    const completion = await groqWithRetry(groq, {
       model: "llama-3.3-70b-versatile",
       messages: [
         {
@@ -257,10 +256,12 @@ async function handleSuggestions(analysis: ChatRequest["analysis"]): Promise<Nex
 
 export async function POST(request: NextRequest) {
   try {
+    // Created per request so `next build` doesn't need GROQ_API_KEY
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
     const body: ChatRequest & { mode?: "suggestions" } = await request.json()
 
     if (body.mode === "suggestions") {
-      return handleSuggestions(body.analysis)
+      return handleSuggestions(groq, body.analysis)
     }
 
     const { question, history, analysis } = body
@@ -327,7 +328,7 @@ ${documentContext}`
       { role: "user", content: question },
     ]
 
-    const completion = await groqWithRetry({
+    const completion = await groqWithRetry(groq, {
       model: "llama-3.3-70b-versatile",
       messages,
       temperature: 0.2,
@@ -379,8 +380,9 @@ export async function GET(request: NextRequest) {
   const contextParam = searchParams.get("context")
   if (!contextParam) return NextResponse.json({ questions: [] })
   try {
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
     const analysis = JSON.parse(decodeURIComponent(contextParam))
-    return handleSuggestions(analysis)
+    return handleSuggestions(groq, analysis)
   } catch {
     return NextResponse.json({ questions: [] })
   }

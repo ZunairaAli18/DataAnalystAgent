@@ -10,3 +10,6 @@ node_modules/
 .next/
 .env*.local
 .DS_Store
+# Cloudflare / OpenNext build output
+.open-next/
+.wrangler/

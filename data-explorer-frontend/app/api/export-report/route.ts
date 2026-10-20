@@ -2,6 +2,7 @@
 // Calls the Python PDF generator on the backend service
 
 import { NextRequest, NextResponse } from "next/server"
+import { API_BASE_URL } from "@/lib/api"
 
 export const maxDuration = 60 // seconds
 
@@ -13,7 +14,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid analysis data" }, { status: 400 })
     }
 
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"
+    const backendUrl = API_BASE_URL
     const response = await fetch(`${backendUrl}/generate-pdf-report`, {
       method: "POST",
       headers: {

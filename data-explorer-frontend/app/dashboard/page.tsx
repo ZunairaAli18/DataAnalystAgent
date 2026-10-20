@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { AppLayout } from "@/components/app-layout"
+import { API_BASE_URL } from "@/lib/api"
 import {
   Info,
   TrendingUp,
@@ -1215,7 +1216,6 @@ const runAnalysis = useCallback(async (forceRefresh = false) => {
     } else if (datasetId) {
       // --- Large dataset — fetch from API ---
       try {
-        const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
         const response = await fetch(`${API_BASE_URL}/data/${datasetId}`)
         if (!response.ok) throw new Error("Failed to fetch dataset from API")
         const result = await response.json()

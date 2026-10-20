@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { AppLayout } from "@/components/app-layout"
+import { API_BASE_URL } from "@/lib/api"
 import { Loader2, AlertCircle, ChevronLeft, ChevronRight, CheckCircle, ArrowLeft, Download, BarChart3 } from "lucide-react"
 
 interface Column {
@@ -65,7 +66,6 @@ export default function CleanedDataPage() {
         })
       } else if (cleanedId) {
         // Large dataset — fetch from API
-        const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
         const response = await fetch(`${API_BASE_URL}/data/${cleanedId}`)
         if (!response.ok) throw new Error("Failed to fetch cleaned data")
         const result = await response.json()

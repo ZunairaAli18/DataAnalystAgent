@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import Groq from "groq-sdk"
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-
 interface ColumnMeta {
   key: string
   label: string
@@ -718,7 +716,7 @@ function logError(stage: string, error: unknown) {
 
 /* ── AI Analysis via Groq ── */
 
-async function runAIAnalysis(dataSummary: string): Promise<{
+async function runAIAnalysis(groq: Groq, dataSummary: string): Promise<{
   title: string
   kpis: KPI[]
   charts: ChartData[]
@@ -957,6 +955,8 @@ export async function POST(request: NextRequest) {
   log(`🚀 [${requestId}] REQUEST RECEIVED`)
 
   try {
+    // Created per request so `next build` doesn't need GROQ_API_KEY
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
     const body: AnalysisRequest = await request.json()
     const { columns, rows, dataset_id } = body
 
@@ -1005,7 +1005,7 @@ export async function POST(request: NextRequest) {
 
     // Run AI analysis
     log(`🤖 [${requestId}] STARTING AI ANALYSIS...`)
-    const aiAnalysis = await runAIAnalysis(dataSummary)
+    const aiAnalysis = await runAIAnalysis(groq, dataSummary)
     log(`✅ [${requestId}] AI ANALYSIS COMPLETE`)
 
     const finalResponse = {
